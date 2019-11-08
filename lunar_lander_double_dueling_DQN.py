@@ -82,6 +82,7 @@ mainQ = q_network()
 targetQ = q_network()
 
 np.random.random()
+rewards_history = []
 
 for i in range(num_episodes):
     done = False
@@ -118,7 +119,11 @@ for i in range(num_episodes):
         epoch_steps+=1
         episodic_reward += reward
 
-    print('[epoch ',i,' (steps per epoch: ',epoch_steps,')] Avg loss: ',np.mean(episodic_loss) if len(episodic_loss) > 0 else 0, ' Total reward: ', episodic_reward, f'Epsilon: {epsilon:.4f}')
-targetQ.save('D:\Projects\RL\RL\lunar_ddqn.h5')
+    rewards_history.append(episodic_reward)
+    last_mean = np.mean(rewards_history[:-100])
+    print('[epoch ',i,' (steps: ',epoch_steps,')] Avg loss: ',np.mean(episodic_loss) if len(episodic_loss) > 0 else 0, ' Total reward: ', episodic_reward, f'Epsilon: {epsilon:.4f} Mean(100)={last_mean:.4f}')
+    if last_mean > 200:
+        break
+targetQ.save('lunar_dueling_ddqn.h5')
 env.close()
 input("training complete...")
