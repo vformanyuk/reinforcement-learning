@@ -159,7 +159,7 @@ for i in range(num_episodes):
 
     priority_beta += priority_beta_step
     rewards_history.append(episodic_reward)
-    last_mean = np.mean(rewards_history[:-100])
+    last_mean = np.mean(rewards_history[-100:])
 
     print('[epoch ',i,' (steps: ',epoch_steps,')] Avg loss: ',np.mean(episodic_loss) if len(episodic_loss) > 0 else 0, ' Total reward: ', episodic_reward, f'Epsilon: {epsilon:.4f} Mean(100)={last_mean:.4f}')
     if last_mean > 200:

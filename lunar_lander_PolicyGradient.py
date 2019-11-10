@@ -102,7 +102,7 @@ for i in range(num_episodes):
     total_episod_reward = sum(episod_rewards)
     rewards_history.append(total_episod_reward)
 
-    last_mean = np.mean(rewards_history[:-100])
+    last_mean = np.mean(rewards_history[-100:])
     print(f'[epoch {i} (steps: {epoch_steps})] Loss: {loss} Total reward: {total_episod_reward} Mean(100)={last_mean:.4f}')
     if last_mean > 200:
         break
