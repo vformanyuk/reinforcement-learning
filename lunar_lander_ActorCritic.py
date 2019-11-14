@@ -29,7 +29,8 @@ def policy_network():
     x = keras.layers.Dense(256, activation='relu')(input)
     x = keras.layers.Dense(128, activation='relu')(x)
     x = keras.layers.Dense(64, activation='relu')(x)
-    actions = keras.layers.Dense(outputs_count, activation='softmax')(x)
+    #x = keras.layers.BatchNormalization()(x)
+    actions = keras.layers.Dense(outputs_count, activation='linear')(x)#keras.layers.Dense(outputs_count, activation='softmax')(x)
     v= keras.layers.Dense(1, activation='linear')(x)
 
     model = keras.Model(inputs=input, outputs=[actions,v])
@@ -63,7 +64,7 @@ else:
     policy = policy_network()
     print("New model created.")
 
-np.random.random(0)
+np.random.random()
 rewards_history = []
 
 for i in range(num_episodes):
@@ -74,8 +75,9 @@ for i in range(num_episodes):
 
     while not done:
         #env.render()
-        actions_distribution, _ = policy(np.expand_dims(observation, axis = 0)) #actions distribution frequently is all NaN!!!
-        chosen_action = np.random.choice(env.action_space.n, p=actions_distribution[0].numpy())
+        actions_distribution, _ = policy(np.expand_dims(observation, axis = 0), training=False) #actions distribution frequently is all NaN!!!
+        soft_max = tf.nn.softmax(actions_distribution)
+        chosen_action = np.random.choice(env.action_space.n, p=soft_max[0].numpy())
         next_observation, reward, done, _ = env.step(chosen_action)
 
         state_tensor = tf.convert_to_tensor(observation, dtype = tf.float32)
