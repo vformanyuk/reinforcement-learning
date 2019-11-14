@@ -23,7 +23,7 @@ start_steps = 1200
 
 epsilon = 1
 epsilon_min = 0.01
-epsilon_decay_steps = 5e-5
+epsilon_decay_steps = 1.5e-4
 
 priority_eps = 0.00001
 priority_alpha = 0.6
@@ -34,7 +34,7 @@ piority_max_prob = 1
 learning_rate = 0.001
 batch_size = 64
 X_shape = (env.observation_space.shape[0])
-discount_factor = 0.97
+discount_factor = 0.99
 
 exp_buffer_capacity = 100000
 
@@ -113,7 +113,7 @@ def get_priority(err):
 mainQ = q_network()
 targetQ = q_network()
 
-np.random.random()
+np.random.random(0)
 rewards_history = []
 
 for i in range(num_episodes):
