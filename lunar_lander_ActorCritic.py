@@ -23,6 +23,7 @@ outputs_count = env.action_space.n
 checkpoint_file_name = 'll_ac_checkpoint.h5'
 
 optimizer = tf.keras.optimizers.Adam(learning_rate)
+mse_loss = tf.keras.losses.MeanSquaredError()
 
 def policy_network():
     input = keras.layers.Input(shape=(None, X_shape))
@@ -35,21 +36,26 @@ def policy_network():
     model = keras.Model(inputs=input, outputs=[actions,v])
     return model
 
-@tf.function
-def learn(state, action, reward, new_state, done):
-    one_hot_actions_mask = tf.one_hot(action, depth=outputs_count, on_value = 1.0, off_value = 0.0, dtype=tf.float32) # shape = len(actions), 4
+@tf.function(experimental_relax_shapes=True)
+def learn(states, actions, rewards, values):
+    one_hot_actions_mask = tf.one_hot(actions, depth=outputs_count, on_value = 1.0, off_value = 0.0, dtype=tf.float32) # shape = len(actions), 4
 
-    target = reward
-    if done==0:
-        _, v_next = policy(tf.expand_dims(new_state, axis=0))
-        target += gamma * v_next
+    # 1. Calculate episode Q value
+    Q_target = 0.
+    rewards_max_idx = len(rewards) - 1
+    Q_tensor = tf.TensorArray(dtype = tf.float32, size = len(rewards))
+    for j in tf.range(rewards_max_idx, 0, delta = -1):
+        Q_target = rewards[j] + gamma*Q_target
+        Q_tensor.write(rewards_max_idx - j,  Q_target)
+
+    # 2. Calculate advantage. Q(s,a) - V(s)
+    advantage = Q_tensor.stack() - values # shape = (len(actions), 1)
 
     with tf.GradientTape() as tape:
-        actions_distribution, v = policy(tf.expand_dims(state, axis = 0))
-        delta = target - v
+        actions_distributions, _ = policy(states)
 
-        actor_loss = tf.reduce_sum(-tf.math.log(actions_distribution) * one_hot_actions_mask) * delta
-        crtitic_loss = tf.math.square(delta)
+        actor_loss = tf.reduce_mean( -tf.math.log(tf.reduce_sum(actions_distributions * one_hot_actions_mask, axis=1)) * advantage)
+        crtitic_loss = tf.math.reduce_mean(tf.math.square(advantage)) * 0.5
 
         loss = actor_loss + crtitic_loss
     gradients = tape.gradient(loss, policy.trainable_variables)
@@ -71,23 +77,33 @@ for i in range(num_episodes):
     observation = env.reset()
     epoch_steps = 0
     episod_rewards = []
+    states_memory = []
+    V_memory = []
+    actions_memory = []
 
     while not done:
         #env.render()
-        actions_distribution, _ = policy(np.expand_dims(observation, axis = 0)) #actions distribution frequently is all NaN!!!
+        actions_distribution, v = policy(np.expand_dims(observation, axis = 0))
         chosen_action = np.random.choice(env.action_space.n, p=actions_distribution[0].numpy())
         next_observation, reward, done, _ = env.step(chosen_action)
 
-        state_tensor = tf.convert_to_tensor(observation, dtype = tf.float32)
-        next_state_tensor = tf.convert_to_tensor(next_observation, dtype = tf.float32)
-        action_tensor = tf.convert_to_tensor(chosen_action, dtype = tf.uint8)
-        reward_tensor = tf.convert_to_tensor(reward, dtype = tf.float32)
-        done_tensor = tf.convert_to_tensor(int(done), dtype = tf.uint8)
-        loss = learn(state_tensor, action_tensor, reward_tensor, next_state_tensor, done_tensor)[0][0].numpy()
-
         episod_rewards.append(reward)
+        V_memory.append(tf.squeeze(v)) # v is tensor
+        actions_memory.append(chosen_action)
+        states_memory.append(tf.convert_to_tensor(observation, dtype = tf.float32))
+
         epoch_steps+=1
         observation = next_observation
+
+    #get Q value for terminate state
+    #_, v = policy(np.expand_dims(observation, axis = 0))
+    #V_memory.append(v)
+
+    states_tensor = tf.stack(states_memory)
+    actions_tensor = tf.convert_to_tensor(actions_memory, dtype = tf.int32)
+    rewards_tensor = tf.convert_to_tensor(episod_rewards, dtype = tf.float32)
+    V_tensor = tf.stack(V_memory)
+    loss = learn(states_tensor, actions_tensor, rewards_tensor, V_tensor).numpy()
 
     if i % checkpoint_step == 0 and i > 0:
         policy.save(checkpoint_file_name)
