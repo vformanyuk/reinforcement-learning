@@ -14,7 +14,7 @@ env = gym.make('LunarLander-v2')
 num_episodes = 5000
 learning_rate = 0.001
 X_shape = (env.observation_space.shape[0])
-gamma = 0.97
+gamma = 0.99
 
 checkpoint_step = 500
 
@@ -23,44 +23,64 @@ outputs_count = env.action_space.n
 checkpoint_file_name = 'll_ac_checkpoint.h5'
 
 optimizer = tf.keras.optimizers.Adam(learning_rate)
+mse_loss = tf.keras.losses.MeanSquaredError()
 
 def policy_network():
     input = keras.layers.Input(shape=(None, X_shape))
-    x = keras.layers.Dense(256, activation='relu')(input)
-    x = keras.layers.Dense(128, activation='relu')(x)
-    x = keras.layers.Dense(64, activation='relu')(x)
-    actions = keras.layers.Dense(outputs_count, activation='softmax')(x)
-    v= keras.layers.Dense(1, activation='linear')(x)
+    x = keras.layers.Dense(256, activation='relu', kernel_regularizer=keras.regularizers.l2(0.01))(input)
+    x = keras.layers.Dense(128, activation='relu', kernel_regularizer=keras.regularizers.l2(0.01))(x)
+    actions_layer = keras.layers.Dense(outputs_count, activation='linear')(x)
 
-    model = keras.Model(inputs=input, outputs=[actions,v])
+    model = keras.Model(inputs=input, outputs=actions_layer)
     return model
 
-@tf.function(experimental_relax_shapes=True)
+def value_network():
+    input = keras.layers.Input(shape=(None, X_shape))
+    x = keras.layers.Dense(256, activation='relu')(input) #, kernel_regularizer=keras.regularizers.l2(0.01)
+    x = keras.layers.Dense(128, activation='relu')(x)
+    v_layer = keras.layers.Dense(1, activation='linear')(x)
+
+    model = keras.Model(inputs=input, outputs=v_layer)
+    return model
+
+actor = policy_network()
+critic = value_network()
+
+#@tf.function(experimental_relax_shapes=True)
 def learn(states, actions, rewards):
     one_hot_actions_mask = tf.one_hot(actions, depth=outputs_count, on_value = 1.0, off_value = 0.0, dtype=tf.float32) # shape = len(actions), 4
+    advantage = tf.Variable(initial_value = tf.zeros_like(rewards), dtype=tf.float32, trainable=False)
 
+    #critic training
     with tf.GradientTape() as tape:
-        actions_distributions, values = policy(states)
-
+        Q_tensor = tf.TensorArray(dtype = tf.float32, size = len(rewards))
+        values = critic(states, training=True)
+        values = tf.squeeze(values)
+        
+        # 1. Calculate episode Q value
         with tape.stop_recording():
-            # 1. Calculate episode Q value
             Q_target = 0.
             rewards_max_idx = len(rewards) - 1
-            Q_tensor = tf.TensorArray(dtype = tf.float32, size = len(rewards))
             for j in tf.range(rewards_max_idx, 0, delta = -1):
                 Q_target = rewards[j] + gamma*Q_target
                 Q_tensor.write(rewards_max_idx - j,  Q_target)
 
         # 2. Calculate advantage. Q(s,a) - V(s)
-        advantage = Q_tensor.stack() - values # shape = (len(actions), 1)
+        advantage.assign(Q_tensor.stack() - values)
 
-        actor_loss = tf.reduce_mean( -tf.math.log(tf.reduce_sum(actions_distributions * one_hot_actions_mask, axis=1)) * advantage)
-        crtitic_loss = tf.math.reduce_mean(tf.math.square(advantage)) * 0.5
+        crtitic_loss = mse_loss(Q_tensor.stack(), values)
+    critic_gradients = tape.gradient(crtitic_loss, critic.trainable_variables)
+    optimizer.apply_gradients(zip(critic_gradients, critic.trainable_variables))
 
-        loss = actor_loss + crtitic_loss
-    gradients = tape.gradient(loss, policy.trainable_variables)
-    optimizer.apply_gradients(zip(gradients, policy.trainable_variables))
-    return loss
+    # actor training
+    with tf.GradientTape() as tape:
+        actions_logits = actor(states, training=True)
+        actions_distribution = tf.nn.log_softmax(actions_logits)
+        
+        actor_loss = tf.reduce_mean(-tf.reduce_sum(actions_distribution * one_hot_actions_mask, axis=1) * advantage)
+    actor_gradients = tape.gradient(actor_loss, actor.trainable_variables)
+    optimizer.apply_gradients(zip(actor_gradients, actor.trainable_variables))
+    return actor_loss + crtitic_loss
 
 #if os.path.isfile(checkpoint_file_name):
 #    policy = keras.models.load_model(checkpoint_file_name)
@@ -69,7 +89,6 @@ def learn(states, actions, rewards):
 #    policy = policy_network()
 #    print("New model created.")
 
-policy = policy_network()
 np.random.random(0)
 rewards_history = []
 
@@ -82,8 +101,10 @@ for i in range(num_episodes):
     actions_memory = []
 
     while not done:
-        actions_distribution, _ = policy(np.expand_dims(observation, axis = 0), training=False)
-        chosen_action = np.random.choice(env.action_space.n, p=actions_distribution[0].numpy())
+        actions_logits = actor(np.expand_dims(observation, axis = 0), training=False)
+        actions_distribution = tf.nn.softmax(actions_logits)[0].numpy()
+
+        chosen_action = np.random.choice(env.action_space.n, p=actions_distribution)
         next_observation, reward, done, _ = env.step(chosen_action)
 
         episod_rewards.append(reward)
@@ -109,6 +130,6 @@ for i in range(num_episodes):
     if last_mean > 200:
         break
 env.close()
-policy.save('lunar_lander_ac.h5')
+actor.save('lunar_lander_ac.h5')
 input("training complete...")
 
