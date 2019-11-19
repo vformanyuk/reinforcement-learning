@@ -4,6 +4,15 @@ import tensorflow as tf
 from tensorflow import keras
 import os
 
+'''
+Try also:
+1) N-step returns. Consider only last N steps of episode
+2) Lambda returns. G(t) = R(t+1) + gamma*(1-lambda(t+1))*V(S[t+1]) + gamma * lambda(t+1)*G(t+1)
+
+3) Weighted returns. G(0)=V(S[0]), G(t) = Pi(A|S)/Mu(A|S)*(R[t+1] + gamma*G(t+1)). Where Mu(A|S) - copy of Pi before episode start
+    This works when Pi was modified during training episode, or if Pi might be modified by other networks (A3C)
+'''
+
 # prevent TensorFlow of allocating whole GPU memory
 gpus = tf.config.experimental.list_physical_devices('GPU')
 if len(gpus) > 0:
@@ -12,7 +21,8 @@ if len(gpus) > 0:
 env = gym.make('LunarLander-v2')
 
 num_episodes = 5000
-learning_rate = 0.001
+actor_learning_rate = 0.001
+critic_learning_rate = 0.0005
 X_shape = (env.observation_space.shape[0])
 gamma = 0.99
 
@@ -22,13 +32,15 @@ outputs_count = env.action_space.n
 
 checkpoint_file_name = 'll_ac_checkpoint.h5'
 
-optimizer = tf.keras.optimizers.Adam(learning_rate)
+actor_optimizer = tf.keras.optimizers.Adam(actor_learning_rate)
+critic_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
 mse_loss = tf.keras.losses.MeanSquaredError()
 
 def policy_network():
     input = keras.layers.Input(shape=(None, X_shape))
-    x = keras.layers.Dense(256, activation='relu', kernel_regularizer=keras.regularizers.l2(0.01))(input)
-    x = keras.layers.Dense(128, activation='relu', kernel_regularizer=keras.regularizers.l2(0.01))(x)
+    x = keras.layers.Dense(256, activation='relu')(input)
+    x = keras.layers.Dense(128, activation='relu')(x)
+    x = keras.layers.Dense(64, activation='relu')(x)
     actions_layer = keras.layers.Dense(outputs_count, activation='linear')(x)
 
     model = keras.Model(inputs=input, outputs=actions_layer)
@@ -36,7 +48,7 @@ def policy_network():
 
 def value_network():
     input = keras.layers.Input(shape=(None, X_shape))
-    x = keras.layers.Dense(256, activation='relu')(input) #, kernel_regularizer=keras.regularizers.l2(0.01)
+    x = keras.layers.Dense(512, activation='relu')(input)
     x = keras.layers.Dense(128, activation='relu')(x)
     v_layer = keras.layers.Dense(1, activation='linear')(x)
 
@@ -46,41 +58,39 @@ def value_network():
 actor = policy_network()
 critic = value_network()
 
-#@tf.function(experimental_relax_shapes=True)
-def learn(states, actions, rewards):
+@tf.function(experimental_relax_shapes=True)
+def train_actor(states, actions, advantage):
     one_hot_actions_mask = tf.one_hot(actions, depth=outputs_count, on_value = 1.0, off_value = 0.0, dtype=tf.float32) # shape = len(actions), 4
-    advantage = tf.Variable(initial_value = tf.zeros_like(rewards), dtype=tf.float32, trainable=False)
-
-    #critic training
-    with tf.GradientTape() as tape:
-        Q_tensor = tf.TensorArray(dtype = tf.float32, size = len(rewards))
-        values = critic(states, training=True)
-        values = tf.squeeze(values)
-        
-        # 1. Calculate episode Q value
-        with tape.stop_recording():
-            Q_target = 0.
-            rewards_max_idx = len(rewards) - 1
-            for j in tf.range(rewards_max_idx, 0, delta = -1):
-                Q_target = rewards[j] + gamma*Q_target
-                Q_tensor.write(rewards_max_idx - j,  Q_target)
-
-        # 2. Calculate advantage. Q(s,a) - V(s)
-        advantage.assign(Q_tensor.stack() - values)
-
-        crtitic_loss = mse_loss(Q_tensor.stack(), values)
-    critic_gradients = tape.gradient(crtitic_loss, critic.trainable_variables)
-    optimizer.apply_gradients(zip(critic_gradients, critic.trainable_variables))
-
-    # actor training
+    
     with tf.GradientTape() as tape:
         actions_logits = actor(states, training=True)
         actions_distribution = tf.nn.log_softmax(actions_logits)
         
-        actor_loss = tf.reduce_mean(-tf.reduce_sum(actions_distribution * one_hot_actions_mask, axis=1) * advantage)
-    actor_gradients = tape.gradient(actor_loss, actor.trainable_variables)
-    optimizer.apply_gradients(zip(actor_gradients, actor.trainable_variables))
-    return actor_loss + crtitic_loss
+        loss = tf.reduce_mean(-tf.reduce_sum(actions_distribution * one_hot_actions_mask, axis=1) * advantage)
+    gradients = tape.gradient(loss, actor.trainable_variables)
+    actor_optimizer.apply_gradients(zip(gradients, actor.trainable_variables))
+    return loss
+
+def calculate_Q(rewards):
+    Q_tensor = []
+    Q_target = 0.
+    rewards_max_idx = len(rewards) - 1
+    for j in tf.range(rewards_max_idx, -1, delta = -1):
+        Q_target = rewards[j] + gamma*Q_target
+        Q_tensor.append(Q_target)
+    Q_tensor.reverse() #Very important to reverse calculated Q values as they are calculated backwards
+    return tf.convert_to_tensor(Q_tensor, dtype = tf.float32)
+
+@tf.function(experimental_relax_shapes=True)
+def train_critic(states, Q):
+    with tf.GradientTape() as tape:
+        values = critic(states, training=True)
+        values = tf.squeeze(values)
+        advantage = Q - values
+        loss = mse_loss(Q, values)
+    gradients = tape.gradient(loss, critic.trainable_variables)
+    critic_optimizer.apply_gradients(zip(gradients, critic.trainable_variables))
+    return loss, advantage
 
 #if os.path.isfile(checkpoint_file_name):
 #    policy = keras.models.load_model(checkpoint_file_name)
@@ -116,9 +126,11 @@ for i in range(num_episodes):
 
     states_tensor = tf.stack(states_memory)
     actions_tensor = tf.convert_to_tensor(actions_memory, dtype = tf.int32)
-    rewards_tensor = tf.convert_to_tensor(episod_rewards, dtype = tf.float32)
-    loss = learn(states_tensor, actions_tensor, rewards_tensor).numpy()
 
+    Q = calculate_Q(episod_rewards)
+    critic_loss, adv = train_critic(states_tensor, Q)
+    actor_loss = train_actor(states_tensor,actions_tensor,adv)
+    loss = critic_loss.numpy() + actor_loss.numpy()
     #if i % checkpoint_step == 0 and i > 0:
     #    policy.save(checkpoint_file_name)
 
