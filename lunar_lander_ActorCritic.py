@@ -30,7 +30,11 @@ checkpoint_step = 500
 
 outputs_count = env.action_space.n
 
-checkpoint_file_name = 'll_ac_checkpoint.h5'
+actor_checkpoint_file_name = 'll_actor_checkpoint.h5'
+critic_checkpoint_file_name = 'll_critic_checkpoint.h5'
+
+np.random.random(0)
+rewards_history = []
 
 actor_optimizer = tf.keras.optimizers.Adam(actor_learning_rate)
 critic_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
@@ -38,9 +42,9 @@ mse_loss = tf.keras.losses.MeanSquaredError()
 
 def policy_network():
     input = keras.layers.Input(shape=(None, X_shape))
-    x = keras.layers.Dense(256, activation='relu')(input)
+    x = keras.layers.Dense(512, activation='relu')(input)
     x = keras.layers.Dense(128, activation='relu')(x)
-    x = keras.layers.Dense(64, activation='relu')(x)
+    #x = keras.layers.Dense(128, activation='relu')(x)
     actions_layer = keras.layers.Dense(outputs_count, activation='linear')(x)
 
     model = keras.Model(inputs=input, outputs=actions_layer)
@@ -55,8 +59,19 @@ def value_network():
     model = keras.Model(inputs=input, outputs=v_layer)
     return model
 
-actor = policy_network()
-critic = value_network()
+if os.path.isfile(actor_checkpoint_file_name):
+    actor = keras.models.load_model(actor_checkpoint_file_name)
+    print("Actor model restored from checkpoint.")
+else:
+    actor = policy_network()
+    print("New Actor model created.")
+
+if os.path.isfile(critic_checkpoint_file_name):
+    critic = keras.models.load_model(critic_checkpoint_file_name)
+    print("Critic model restored from checkpoint.")
+else:
+    critic = value_network()
+    print("New Critic model created.")
 
 @tf.function(experimental_relax_shapes=True)
 def train_actor(states, actions, advantage):
@@ -92,15 +107,6 @@ def train_critic(states, Q):
     critic_optimizer.apply_gradients(zip(gradients, critic.trainable_variables))
     return loss, advantage
 
-#if os.path.isfile(checkpoint_file_name):
-#    policy = keras.models.load_model(checkpoint_file_name)
-#    print("Model restored from checkpoint.")
-#else:
-#    policy = policy_network()
-#    print("New model created.")
-
-np.random.random(0)
-rewards_history = []
 
 for i in range(num_episodes):
     done = False
@@ -131,8 +137,10 @@ for i in range(num_episodes):
     critic_loss, adv = train_critic(states_tensor, Q)
     actor_loss = train_actor(states_tensor,actions_tensor,adv)
     loss = critic_loss.numpy() + actor_loss.numpy()
-    #if i % checkpoint_step == 0 and i > 0:
-    #    policy.save(checkpoint_file_name)
+
+    if i % checkpoint_step == 0 and i > 0:
+        actor.save(actor_checkpoint_file_name)
+        critic.save(critic_checkpoint_file_name)
 
     total_episod_reward = sum(episod_rewards)
     rewards_history.append(total_episod_reward)
