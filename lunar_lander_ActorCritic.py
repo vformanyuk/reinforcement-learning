@@ -21,7 +21,7 @@ if len(gpus) > 0:
 env = gym.make('LunarLander-v2')
 
 num_episodes = 5000
-actor_learning_rate = 0.001
+actor_learning_rate = 0.0005
 critic_learning_rate = 0.0005
 X_shape = (env.observation_space.shape[0])
 gamma = 0.99
@@ -44,7 +44,6 @@ def policy_network():
     input = keras.layers.Input(shape=(None, X_shape))
     x = keras.layers.Dense(512, activation='relu')(input)
     x = keras.layers.Dense(128, activation='relu')(x)
-    #x = keras.layers.Dense(128, activation='relu')(x)
     actions_layer = keras.layers.Dense(outputs_count, activation='linear')(x)
 
     model = keras.Model(inputs=input, outputs=actions_layer)
@@ -53,7 +52,7 @@ def policy_network():
 def value_network():
     input = keras.layers.Input(shape=(None, X_shape))
     x = keras.layers.Dense(512, activation='relu')(input)
-    x = keras.layers.Dense(128, activation='relu')(x)
+    x = keras.layers.Dense(128, activation='relu', kernel_regularizer=keras.regularizers.l2(0.01))(x)
     v_layer = keras.layers.Dense(1, activation='linear')(x)
 
     model = keras.Model(inputs=input, outputs=v_layer)
@@ -146,7 +145,7 @@ for i in range(num_episodes):
     rewards_history.append(total_episod_reward)
 
     last_mean = np.mean(rewards_history[-100:])
-    print(f'[epoch {i} (steps: {epoch_steps})] Loss: {loss:.4f} Total reward: {total_episod_reward} Mean(100)={last_mean:.4f}')
+    print(f'[epoch {i}] Actor_Loss: {actor_loss.numpy():.4f} Critic_Loss: {critic_loss.numpy():.4f} Total reward: {total_episod_reward} Mean(100)={last_mean:.4f}')
     if last_mean > 200:
         break
 env.close()
