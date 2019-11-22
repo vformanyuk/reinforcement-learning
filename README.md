@@ -9,5 +9,6 @@ It is representative and doesn't skip frames like some other envs.
 * [Double Dueling DQN](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_double_dueling_DQN.py)
 * [Double Dueling DQN with priority based importance sampling](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_double_dueling_DQN_IS.py)
 * [Vanila Policy Gradient](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_PolicyGradient.py)
+* [Advantage Actor-Critic](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_ActorCritic.py)
 
 Credits for SumTree implementation goes to [RL Code](https://github.com/rlcode)
