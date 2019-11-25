@@ -32,15 +32,14 @@ checkpoint_step = 500
 
 outputs_count = env.action_space.n
 
-actor_checkpoint_file_name = 'll_actor_checkpoint.h5'
-critic_checkpoint_file_name = 'll_critic_checkpoint.h5'
+actor_checkpoint_file_name = 'll_nr_actor_checkpoint.h5'
+critic_checkpoint_file_name = 'll_nr_critic_checkpoint.h5'
 
 np.random.random(0)
 rewards_history = []
 
 actor_optimizer = tf.keras.optimizers.Adam(actor_learning_rate)
 critic_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
-mse_loss = tf.keras.losses.MeanSquaredError()
 
 def policy_network():
     input = keras.layers.Input(shape=(None, X_shape))
@@ -79,7 +78,7 @@ def train_actor(state, action, advantage):
     one_hot_actions_mask = tf.one_hot(action, depth=outputs_count, on_value = 1.0, off_value = 0.0, dtype=tf.float32) # shape = len(actions), 4
     
     with tf.GradientTape() as tape:
-        actions_logits = actor(state, training=True)
+        actions_logits = actor(tf.expand_dims(state, axis =0), training=True)
         actions_distribution = tf.nn.log_softmax(actions_logits)
         
         loss = -tf.reduce_sum(actions_distribution * one_hot_actions_mask) * advantage
@@ -88,21 +87,24 @@ def train_actor(state, action, advantage):
     return loss
 
 #@tf.function(experimental_relax_shapes=True)
-def train_critic(state, next_state, rewards):
+def train_critic(state, next_state, rewards, tau, T):
     gamma_multiplier = 1
     tdN_error = 0
     fst_idx = len(rewards) - 1 - N
-    for j in tf.range(N - 1):
-        tdN_error += gamma_multiplier * rewards[fst_idx + j]
+    for j in tf.range(tau, min(tau+N, T)):
+        tdN_error += gamma_multiplier * rewards[j]
         gamma_multiplier *= gamma
-    gamma_multiplier *= gamma
+
+    if tau + N < T:
+        gamma_multiplier *= gamma
+        next_state_value = critic(tf.expand_dims(next_state, axis =0), training=False)
+        tdN_error += gamma_multiplier * tf.squeeze(next_state_value)
 
     with tf.GradientTape() as tape:
-        next_state_value = critic(tf.expand_dims(next_state, axis =0), training=True)
         current_state_value = critic(tf.expand_dims(state, axis =0), training=True)
-        tdN_error += gamma_multiplier*next_state_value
+        current_state_value = tf.squeeze(current_state_value)
         advantage = tdN_error - current_state_value
-        loss = mse_loss(tdN_error, current_state_value)
+        loss = 0.5 * tf.square(advantage) #mse_loss(tdN_error, current_state_value)
     gradients = tape.gradient(loss, critic.trainable_variables)
     critic_optimizer.apply_gradients(zip(gradients, critic.trainable_variables))
     return loss, advantage
@@ -115,25 +117,33 @@ for i in range(num_episodes):
     episod_rewards = []
     states_memory = []
     actions_memory = []
+    actor_losses=[]
+    critic_losses=[]
+    T = 10000
+    tau = 0
 
-    while not done:
-        actions_logits = actor(np.expand_dims(observation, axis = 0), training=False)
-        actions_distribution = tf.nn.softmax(actions_logits)[0].numpy()
+    while tau != T - 1: #not done:
+        if epoch_steps < T:
+            actions_logits = actor(np.expand_dims(observation, axis = 0), training=False)
+            actions_distribution = tf.nn.softmax(actions_logits)[0].numpy()
 
-        chosen_action = np.random.choice(env.action_space.n, p=actions_distribution)
-        next_observation, reward, done, _ = env.step(chosen_action)
+            chosen_action = np.random.choice(env.action_space.n, p=actions_distribution)
+            next_observation, reward, done, _ = env.step(chosen_action)
+            if done:
+                T = epoch_steps + 1
 
-        episod_rewards.append(reward)
-        actions_memory.append(chosen_action)
-        states_memory.append(tf.convert_to_tensor(observation, dtype = tf.float32))
+            episod_rewards.append(reward)
+            actions_memory.append(chosen_action)
+            states_memory.append(tf.convert_to_tensor(observation, dtype = tf.float32))
+
+        tau = epoch_steps - N # + 1
+        if tau>=0:
+            critic_loss, adv = train_critic(states_memory[tau], observation, episod_rewards, tau, T)
+            critic_losses.append(critic_loss)
+            actor_losses.append(train_actor(states_memory[tau], actions_memory[tau], adv))
 
         epoch_steps+=1
         observation = next_observation
-
-        # need to handle terminal state!
-        if epoch_steps > N:
-            critic_loss, adv = train_critic(states_memory[epoch_steps-N], observation, episod_rewards)
-            actor_loss = train_actor(states_memory[epoch_steps-N], actions_memory[epoch_steps-N], adv)
 
     #if i % checkpoint_step == 0 and i > 0:
     #    actor.save(actor_checkpoint_file_name)
@@ -143,10 +153,10 @@ for i in range(num_episodes):
     rewards_history.append(total_episod_reward)
 
     last_mean = np.mean(rewards_history[-100:])
-    print(f'[epoch {i}] Actor_Loss: {actor_loss.numpy():.4f} Critic_Loss: {critic_loss.numpy():.4f} Total reward: {total_episod_reward} Mean(100)={last_mean:.4f}')
+    print(f'[epoch {i} ({epoch_steps})] Actor mloss: {np.mean(actor_losses):.4f} Critic mloss: {np.mean(critic_losses):.4f} Total reward: {total_episod_reward} Mean(100)={last_mean:.4f}')
     if last_mean > 200:
         break
 env.close()
-actor.save('lunar_lander_ac.h5')
+actor.save('lunar_lander_ac_nr.h5')
 input("training complete...")
 
