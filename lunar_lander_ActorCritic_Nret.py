@@ -73,9 +73,9 @@ else:
     critic = value_network()
     print("New Critic model created.")
 
-#@tf.function(experimental_relax_shapes=True)
+@tf.function
 def train_actor(state, action, advantage):
-    one_hot_actions_mask = tf.one_hot(action, depth=outputs_count, on_value = 1.0, off_value = 0.0, dtype=tf.float32) # shape = len(actions), 4
+    one_hot_actions_mask = tf.one_hot(action, depth=outputs_count, on_value = 1.0, off_value = 0.0, dtype=tf.float32)
     
     with tf.GradientTape() as tape:
         actions_logits = actor(tf.expand_dims(state, axis =0), training=True)
@@ -102,8 +102,8 @@ def train_critic(state, next_state, rewards, tau, T):
 
     with tf.GradientTape() as tape:
         current_state_value = critic(tf.expand_dims(state, axis =0), training=True)
-        current_state_value = tf.squeeze(current_state_value)
-        advantage = tdN_error - current_state_value
+        
+        advantage = tdN_error - tf.squeeze(current_state_value)
         loss = 0.5 * tf.square(advantage) #mse_loss(tdN_error, current_state_value)
     gradients = tape.gradient(loss, critic.trainable_variables)
     critic_optimizer.apply_gradients(zip(gradients, critic.trainable_variables))
@@ -122,6 +122,7 @@ for i in range(num_episodes):
     T = 10000
     tau = 0
 
+    #episode length will be always N steps longer
     while tau != T - 1: #not done:
         if epoch_steps < T:
             actions_logits = actor(np.expand_dims(observation, axis = 0), training=False)
@@ -133,7 +134,7 @@ for i in range(num_episodes):
                 T = epoch_steps + 1
 
             episod_rewards.append(reward)
-            actions_memory.append(chosen_action)
+            actions_memory.append(tf.convert_to_tensor(chosen_action, dtype = tf.int32))
             states_memory.append(tf.convert_to_tensor(observation, dtype = tf.float32))
 
         tau = epoch_steps - N # + 1
