@@ -22,6 +22,7 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="lunar_lander_ActorCritic_Nret.py" />
     <Compile Include="lunar_lander_ActorCritic.py">
       <SubType>Code</SubType>
     </Compile>
