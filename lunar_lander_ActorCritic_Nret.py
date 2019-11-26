@@ -26,7 +26,7 @@ critic_learning_rate = 0.0005
 X_shape = (env.observation_space.shape[0])
 gamma = 0.99
 
-N = 5
+N = 6
 
 checkpoint_step = 500
 
@@ -73,15 +73,15 @@ else:
     critic = value_network()
     print("New Critic model created.")
 
-@tf.function
-def train_actor(state, action, advantage):
-    one_hot_actions_mask = tf.one_hot(action, depth=outputs_count, on_value = 1.0, off_value = 0.0, dtype=tf.float32)
+@tf.function(experimental_relax_shapes=True)
+def train_actor(states, actions, advantages):
+    one_hot_actions_mask = tf.one_hot(actions, depth=outputs_count, on_value = 1.0, off_value = 0.0, dtype=tf.float32)
     
     with tf.GradientTape() as tape:
-        actions_logits = actor(tf.expand_dims(state, axis =0), training=True)
+        actions_logits = actor(states, training=True)
         actions_distribution = tf.nn.log_softmax(actions_logits)
         
-        loss = -tf.reduce_sum(actions_distribution * one_hot_actions_mask) * advantage
+        loss = tf.reduce_mean( -tf.reduce_sum(actions_distribution * one_hot_actions_mask, axis=1) * advantages)
     gradients = tape.gradient(loss, actor.trainable_variables)
     actor_optimizer.apply_gradients(zip(gradients, actor.trainable_variables))
     return loss
@@ -90,8 +90,7 @@ def train_actor(state, action, advantage):
 def train_critic(state, next_state, rewards, tau, T):
     gamma_multiplier = 1
     tdN_error = 0
-    fst_idx = len(rewards) - 1 - N
-    for j in tf.range(tau, min(tau+N, T)):
+    for j in tf.range(tau + 1, min(tau+N, T)):
         tdN_error += gamma_multiplier * rewards[j]
         gamma_multiplier *= gamma
 
@@ -104,7 +103,7 @@ def train_critic(state, next_state, rewards, tau, T):
         current_state_value = critic(tf.expand_dims(state, axis =0), training=True)
         
         advantage = tdN_error - tf.squeeze(current_state_value)
-        loss = 0.5 * tf.square(advantage) #mse_loss(tdN_error, current_state_value)
+        loss = tf.square(advantage) #mse_loss(tdN_error, current_state_value)
     gradients = tape.gradient(loss, critic.trainable_variables)
     critic_optimizer.apply_gradients(zip(gradients, critic.trainable_variables))
     return loss, advantage
@@ -117,7 +116,7 @@ for i in range(num_episodes):
     episod_rewards = []
     states_memory = []
     actions_memory = []
-    actor_losses=[]
+    adv_memory = []
     critic_losses=[]
     T = 10000
     tau = 0
@@ -134,18 +133,21 @@ for i in range(num_episodes):
                 T = epoch_steps + 1
 
             episod_rewards.append(reward)
-            actions_memory.append(tf.convert_to_tensor(chosen_action, dtype = tf.int32))
+            actions_memory.append(chosen_action)
             states_memory.append(tf.convert_to_tensor(observation, dtype = tf.float32))
 
-        tau = epoch_steps - N # + 1
+        tau = epoch_steps - N + 1
         if tau>=0:
             critic_loss, adv = train_critic(states_memory[tau], observation, episod_rewards, tau, T)
+            adv_memory.append(adv)
             critic_losses.append(critic_loss)
-            actor_losses.append(train_actor(states_memory[tau], actions_memory[tau], adv))
 
         epoch_steps+=1
         observation = next_observation
 
+    mean_actor_loss = train_actor(tf.stack(states_memory),
+                                tf.convert_to_tensor(actions_memory, dtype = tf.int32),
+                                tf.convert_to_tensor(adv_memory, dtype = tf.float32))
     #if i % checkpoint_step == 0 and i > 0:
     #    actor.save(actor_checkpoint_file_name)
     #    critic.save(critic_checkpoint_file_name)
@@ -154,10 +156,10 @@ for i in range(num_episodes):
     rewards_history.append(total_episod_reward)
 
     last_mean = np.mean(rewards_history[-100:])
-    print(f'[epoch {i} ({epoch_steps})] Actor mloss: {np.mean(actor_losses):.4f} Critic mloss: {np.mean(critic_losses):.4f} Total reward: {total_episod_reward} Mean(100)={last_mean:.4f}')
+    print(f'[epoch {i} ({epoch_steps})] Actor mloss: {mean_actor_loss:.4f} Critic mloss: {np.mean(critic_losses):.4f} Total reward: {total_episod_reward} Mean(100)={last_mean:.4f}')
     if last_mean > 200:
         break
 env.close()
-actor.save('lunar_lander_ac_nr.h5')
+#actor.save('lunar_lander_ac_nr.h5')
 input("training complete...")
 
