@@ -21,12 +21,12 @@ if len(gpus) > 0:
 env = gym.make('LunarLander-v2')
 
 num_episodes = 5000
-actor_learning_rate = 0.0005
+actor_learning_rate = 0.001
 critic_learning_rate = 0.0005
 X_shape = (env.observation_space.shape[0])
 gamma = 0.99
 
-N = 6
+N = 4
 
 checkpoint_step = 500
 
@@ -90,7 +90,7 @@ def train_actor(states, actions, advantages):
 def train_critic(state, next_state, rewards, tau, T):
     gamma_multiplier = 1
     tdN_error = 0
-    for j in tf.range(tau + 1, min(tau+N, T)):
+    for j in tf.range(tau, min(tau+N, T)):
         tdN_error += gamma_multiplier * rewards[j]
         gamma_multiplier *= gamma
 
@@ -136,7 +136,7 @@ for i in range(num_episodes):
             actions_memory.append(chosen_action)
             states_memory.append(tf.convert_to_tensor(observation, dtype = tf.float32))
 
-        tau = epoch_steps - N + 1
+        tau = epoch_steps - N# + 1
         if tau>=0:
             critic_loss, adv = train_critic(states_memory[tau], observation, episod_rewards, tau, T)
             adv_memory.append(adv)
