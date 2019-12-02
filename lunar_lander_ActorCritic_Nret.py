@@ -25,8 +25,9 @@ actor_learning_rate = 0.001
 critic_learning_rate = 0.0005
 X_shape = (env.observation_space.shape[0])
 gamma = 0.99
+#entropy_beta = 0.01 * tf.math.log(float(2))
 
-N = 4
+N = 6
 
 checkpoint_step = 500
 
@@ -35,6 +36,7 @@ outputs_count = env.action_space.n
 actor_checkpoint_file_name = 'll_nr_actor_checkpoint.h5'
 critic_checkpoint_file_name = 'll_nr_critic_checkpoint.h5'
 
+tf.random.set_seed(0x12345)
 np.random.random(0)
 rewards_history = []
 
@@ -53,7 +55,7 @@ def policy_network():
 def value_network():
     input = keras.layers.Input(shape=(None, X_shape))
     x = keras.layers.Dense(512, activation='relu')(input)
-    x = keras.layers.Dense(128, activation='relu', kernel_regularizer=keras.regularizers.l2(0.01))(x)
+    x = keras.layers.Dense(128, activation='relu', kernel_regularizer=keras.regularizers.l2(0.001))(x)
     v_layer = keras.layers.Dense(1, activation='linear')(x)
 
     model = keras.Model(inputs=input, outputs=v_layer)
@@ -79,23 +81,24 @@ def train_actor(states, actions, advantages):
     
     with tf.GradientTape() as tape:
         actions_logits = actor(states, training=True)
-        actions_distribution = tf.nn.log_softmax(actions_logits)
+        actions_log_distribution = tf.nn.log_softmax(actions_logits)
+        #actions_distribution = tf.nn.softmax(actions_logits)
         
-        loss = tf.reduce_mean( -tf.reduce_sum(actions_distribution * one_hot_actions_mask, axis=1) * advantages)
+        #entropy = -tf.reduce_sum(actions_log_distribution * actions_distribution)
+
+        loss = tf.reduce_mean( -tf.reduce_sum(actions_log_distribution * one_hot_actions_mask, axis=1) * advantages) #+ entropy_beta * entropy
     gradients = tape.gradient(loss, actor.trainable_variables)
     actor_optimizer.apply_gradients(zip(gradients, actor.trainable_variables))
     return loss
 
-#@tf.function(experimental_relax_shapes=True)
 def train_critic(state, next_state, rewards, tau, T):
     gamma_multiplier = 1
     tdN_error = 0
-    for j in tf.range(tau, min(tau+N, T)):
+    for j in tf.range(tau, min(tau + N - 1, T)):
         tdN_error += gamma_multiplier * rewards[j]
         gamma_multiplier *= gamma
 
     if tau + N < T:
-        gamma_multiplier *= gamma
         next_state_value = critic(tf.expand_dims(next_state, axis =0), training=False)
         tdN_error += gamma_multiplier * tf.squeeze(next_state_value)
 
@@ -136,7 +139,7 @@ for i in range(num_episodes):
             actions_memory.append(chosen_action)
             states_memory.append(tf.convert_to_tensor(observation, dtype = tf.float32))
 
-        tau = epoch_steps - N# + 1
+        tau = epoch_steps - N
         if tau>=0:
             critic_loss, adv = train_critic(states_memory[tau], observation, episod_rewards, tau, T)
             adv_memory.append(adv)
@@ -148,9 +151,10 @@ for i in range(num_episodes):
     mean_actor_loss = train_actor(tf.stack(states_memory),
                                 tf.convert_to_tensor(actions_memory, dtype = tf.int32),
                                 tf.convert_to_tensor(adv_memory, dtype = tf.float32))
-    #if i % checkpoint_step == 0 and i > 0:
-    #    actor.save(actor_checkpoint_file_name)
-    #    critic.save(critic_checkpoint_file_name)
+
+    if i % checkpoint_step == 0 and i > 0:
+        actor.save(actor_checkpoint_file_name)
+        critic.save(critic_checkpoint_file_name)
 
     total_episod_reward = sum(episod_rewards)
     rewards_history.append(total_episod_reward)
@@ -160,6 +164,6 @@ for i in range(num_episodes):
     if last_mean > 200:
         break
 env.close()
-#actor.save('lunar_lander_ac_nr.h5')
+actor.save('lunar_lander_ac_nr.h5')
 input("training complete...")
 
