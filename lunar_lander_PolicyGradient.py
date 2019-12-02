@@ -67,7 +67,7 @@ else:
     policy = policy_network()
     print("New model created.")
 
-np.random.random()
+np.random.random(0)
 rewards_history = []
 
 for i in range(num_episodes):

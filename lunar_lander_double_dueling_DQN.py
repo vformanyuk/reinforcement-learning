@@ -12,12 +12,13 @@ env = gym.make('LunarLander-v2')
 
 num_episodes = 1000
 global_step = 0
+steps_train = 4
 copy_step = 100
 start_steps = 1200
 
 epsilon = 1
 epsilon_min = 0.01
-epsilon_decay_steps = 1/(2.5*num_episodes)
+epsilon_decay_steps = 1.5e-4
 
 learning_rate = 0.001
 batch_size = 64
@@ -81,7 +82,7 @@ exp_buffer = deque(maxlen=exp_buffer_capacity)
 mainQ = q_network()
 targetQ = q_network()
 
-np.random.random()
+np.random.random(0)
 rewards_history = []
 
 for i in range(num_episodes):
@@ -100,7 +101,7 @@ for i in range(num_episodes):
                            reward,
                            float(done)])
         
-        if global_step > start_steps:
+        if global_step > start_steps and global_step % steps_train == 0:
             samples = sample_expirience(batch_size)
             states_tensor = tf.stack(samples[:,0])
             actions_tensor = tf.convert_to_tensor(samples[:,1], dtype=tf.uint8)

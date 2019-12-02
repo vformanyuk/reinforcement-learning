@@ -23,7 +23,7 @@ start_steps = 1000
 
 epsilon = 1
 epsilon_min = 0.01
-epsilon_decay_steps = 1/(2.5*num_episodes)
+epsilon_decay_steps = 1.5e-4
 
 outputs_count = env.action_space.n
 
@@ -76,7 +76,7 @@ exp_buffer = deque(maxlen=80000)
 mainQ = q_network()
 targetQ = q_network()
 
-np.random.random()
+np.random.random(0)
 rewards_history = []
 
 for i in range(num_episodes):
