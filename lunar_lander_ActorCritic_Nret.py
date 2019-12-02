@@ -6,11 +6,7 @@ import os
 
 '''
 Try also:
-1) N-step returns. Consider only last N steps of episode
-2) Lambda returns. G(t) = R(t+1) + gamma*(1-lambda(t+1))*V(S[t+1]) + gamma * lambda(t+1)*G(t+1)
-
-3) Weighted returns. G(0)=V(S[0]), G(t) = Pi(A|S)/Mu(A|S)*(R[t+1] + gamma*G(t+1)). Where Mu(A|S) - copy of Pi before episode start
-    This works when Pi was modified during training episode, or if Pi might be modified by other networks (A3C)
+Lambda returns. G(t) = R(t+1) + gamma*(1-lambda(t+1))*V(S[t+1]) + gamma * lambda(t+1)*G(t+1)
 '''
 
 # prevent TensorFlow of allocating whole GPU memory
