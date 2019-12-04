@@ -43,7 +43,7 @@ def policy_network():
 def value_network():
     input = keras.layers.Input(shape=(None, X_shape))
     x = keras.layers.Dense(512, activation='relu')(input)
-    x = keras.layers.Dense(128, activation='relu', kernel_regularizer=keras.regularizers.l2(0.01))(x)
+    x = keras.layers.Dense(128, activation='relu')(x)
     v_layer = keras.layers.Dense(1, activation='linear')(x)
 
     model = keras.Model(inputs=input, outputs=v_layer)
@@ -84,6 +84,7 @@ def calculate_Q(rewards):
         Q_target = rewards[j] + gamma*Q_target
         Q_tensor.append(Q_target)
     Q_tensor.reverse() #Very important to reverse calculated Q values as they are calculated backwards
+    Q_tensor = (Q_tensor - np.mean(Q_tensor)) / np.std(Q_tensor)
     return tf.convert_to_tensor(Q_tensor, dtype = tf.float32)
 
 @tf.function(experimental_relax_shapes=True)
@@ -136,7 +137,7 @@ for i in range(num_episodes):
     rewards_history.append(total_episod_reward)
 
     last_mean = np.mean(rewards_history[-100:])
-    print(f'[epoch {i}] Actor_Loss: {actor_loss.numpy():.4f} Critic_Loss: {critic_loss.numpy():.4f} Total reward: {total_episod_reward} Mean(100)={last_mean:.4f}')
+    print(f'[epoch {i} ({epoch_steps})] Actor_Loss: {actor_loss.numpy():.4f} Critic_Loss: {critic_loss.numpy():.4f} Total reward: {total_episod_reward} Mean(100)={last_mean:.4f}')
     if last_mean > 200:
         break
 env.close()
