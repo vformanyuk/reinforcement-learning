@@ -32,6 +32,7 @@
     <Compile Include="lunar_lander_double_dueling_DQN.py" />
     <Compile Include="lunar_lander_double_dueling_DQN_IS.py" />
     <Compile Include="lunar_lander_keras.py" />
+    <Compile Include="lunar_lander_PPO.py" />
     <Compile Include="lunar_lander_PolicyGradient.py">
       <SubType>Code</SubType>
     </Compile>
