@@ -11,13 +11,21 @@ tf.config.experimental.set_memory_growth(gpus[0], True)
 
 env = gym.make('LunarLander-v2')
 
+# apply gradients (with clipping)
+#grads = tf.gradients(loss, tf.trainable_variables())
+#grads, _ = tf.clip_by_global_norm(grads, 50) # gradient clipping
+#grads_and_vars = list(zip(grads, tf.trainable_variables()))
+#train_op = optimizer.apply_gradients(grads_and_vars)
+
 num_episodes = 5000
 actor_learning_rate = 0.001
 critic_learning_rate = 0.0005
 clipping_epsilon = 0.2
 batch_size = 64
 X_shape = (env.observation_space.shape[0])
-gamma = 0.97
+gamma = 0.99
+gae_lambda = 0.95
+gae_minibatch_size = 36
 entropy_beta = 0.01
 
 checkpoint_step = 500
@@ -91,6 +99,28 @@ def train_critic(state, next_state, reward, done):
     critic_optimizer.apply_gradients(zip(gradients, critic.trainable_variables))
     return loss, advantage
 
+'''
+GAE(t,L,lambda,gamma) = sum((lambda*gamma)^l*delta(t+l), l = [0...L])
+delta(t) = R(t) + V(t+1) - V(t)
+'''
+def calculate_GAE(rewards, V, dones):
+    gae_tensor=[]
+    gae = 0
+    lambda_gamma_multiplier = 1
+    end_idx = len(rewards) - 1
+    start_idx = end_idx - gae_minibatch_size - 1 # tf.range end index is not inclusive
+    for j in tf.range(end_idx, start_idx, delta = -1):
+        # tricky part for last element in V memory! V[last_j+1] does not exist! 
+        # If not done, V[last_j+1] = critic(next_observation)
+        # If done, V[last_j+1] = anything - it will be multiply by zero anyway
+        delta = (rewards[j] + gamma * V[j+1] * (1-dones[j])) - V[j] # A(j)(1) = Q(j) - V(j)
+        gae += lambda_gamma_multiplier*delta
+        lambda_gamma_multiplier *= gae_lambda * gamma
+        gae_tensor.append(gae)
+    gae_tensor.reverse()
+    gae_tensor = (gae_tensor - np.mean(gae_tensor)) / np.std(gae_tensor)
+    return gae_tensor
+
 def sample_expirience(batch_size):
     perm_batch = np.random.permutation(len(exp_buffer))[:batch_size]
     return np.array(exp_buffer)[perm_batch]
@@ -122,6 +152,7 @@ for i in range(num_episodes):
     critic_loss_history = []
     actor_loss_history = []
     episod_rewards = []
+    value_memory = []
     epoch_steps = 0
 
     while not done:
@@ -130,23 +161,19 @@ for i in range(num_episodes):
         actions_logits = tf.squeeze(actions_logits)
         actions_distribution = tf.nn.softmax(actions_logits).numpy()
 
+        state_value = critic(np.expand_dims(observation, axis = 0), training=False)
+        value_memory.append(tf.squeeze(state_value))
+
         chosen_action = np.random.choice(env.action_space.n, p=actions_distribution)
         next_observation, reward, done, _ = env.step(chosen_action)
 
         episod_rewards.append(reward)
-        observation_tensor = tf.convert_to_tensor(observation, dtype=tf.float32)
-        critic_loss, adv = train_critic(observation_tensor, 
-                                        tf.convert_to_tensor(next_observation, dtype=tf.float32),
-                                        tf.convert_to_tensor(reward, dtype=tf.float32), 
-                                        tf.convert_to_tensor(int(done), dtype=tf.int32))
-        critic_loss_history.append(critic_loss)
-
-        exp_buffer.append([observation_tensor, 
+        exp_buffer.append([tf.convert_to_tensor(observation, dtype=tf.float32), 
                            chosen_action, 
                            actions_distribution[chosen_action],
                            adv])
 
-        if global_step % steps_train == 0 and global_step > start_steps:
+        if epoch_steps > batch_size:
             samples = sample_expirience(batch_size)
             states_tensor = tf.stack(samples[:,0])
             actions_tensor = tf.convert_to_tensor(samples[:,1], dtype=tf.int32)
