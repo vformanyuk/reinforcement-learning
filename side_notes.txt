@@ -1,0 +1,13 @@
+A fancy way to compute discounted reward.
+This might be applicable when env has not particular start and _end_ state.
+
+With FIXED batch size B, one could create matrix DR:
+|1|gamma|gamma^2|gamma^3|...|gamma^B  |
+|0|1    |gamma  |gamma^2|...|gamma^B-1|
+|0|0    |1      |gamma  |...|gamma^B-2|
+|...								  |  } B
+|0|0    |0      |0      |...|gamma    |
+|0|0    |0      |0      |...|1        |
+
+Then, reward vector R multiplication by matrix DR would produce vector of discounted rewards
+--------------------------------------------------------------------------------------------
