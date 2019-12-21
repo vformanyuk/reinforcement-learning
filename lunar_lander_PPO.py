@@ -25,14 +25,12 @@ batch_size = 64
 X_shape = (env.observation_space.shape[0])
 gamma = 0.99
 gae_lambda = 0.95
-gae_minibatch_size = 36
 entropy_beta = 0.01
 
 checkpoint_step = 500
 copy_step = 50
 steps_train = 4
 start_steps = 1000
-global_step = 0
 
 outputs_count = env.action_space.n
 
@@ -41,12 +39,9 @@ critic_checkpoint_file_name = 'll_ppo_critic_checkpoint.h5'
 
 actor_optimizer = tf.keras.optimizers.Adam(actor_learning_rate)
 critic_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
-#mse_loss = tf.keras.losses.MeanSquaredError()
-
-exp_buffer = deque(maxlen=200000)
 
 def policy_network():
-    input = keras.layers.Input(shape=(None,X_shape))
+    input = keras.layers.Input(shape=(None, X_shape))
     x = keras.layers.Dense(256, activation='relu')(input)
     x = keras.layers.Dense(128, activation='relu')(x)
     x = keras.layers.Dense(64, activation='relu')(x)
@@ -58,9 +53,7 @@ def policy_network():
 def value_network():
     input = keras.layers.Input(shape=(None, X_shape))
     x = keras.layers.Dense(512, activation='relu')(input)
-    x = keras.layers.Dense(128, activation='relu', 
-                           kernel_regularizer=keras.regularizers.l2(0.001), 
-                           bias_regularizer=keras.regularizers.l2(0.001))(x)
+    x = keras.layers.Dense(128, activation='relu')(x)
     v_layer = keras.layers.Dense(1, activation='linear')(x)
 
     model = keras.Model(inputs=input, outputs=v_layer)
@@ -68,7 +61,7 @@ def value_network():
 
 @tf.function
 def train_actor(states, actions, target_distributions, adv):
-    one_hot_actions_mask = tf.one_hot(actions, depth=outputs_count, on_value = 1.0, off_value = 0.0, dtype=tf.float32) # shape = len(actions), 4
+    one_hot_actions_mask = tf.one_hot(actions, depth=outputs_count, on_value = 1.0, off_value = 0.0, dtype=tf.float32)
 
     with tf.GradientTape() as tape:
         action_logits = tf.squeeze(evaluation_policy(states, training=True))
@@ -80,21 +73,35 @@ def train_actor(states, actions, target_distributions, adv):
 
         r = tf.reduce_sum(evalution_distribution * one_hot_actions_mask, axis=1) / target_distributions
         r_clipped = tf.clip_by_value(r, 1 - clipping_epsilon, 1 + clipping_epsilon)
-        loss = -tf.reduce_mean(tf.math.multiply(tf.math.minimum(r, r_clipped), adv)) + entropy_beta * entropy
+        loss = -tf.reduce_mean(tf.math.minimum(r * adv, r_clipped * adv)) + entropy_beta * entropy
     gradients = tape.gradient(loss, evaluation_policy.trainable_variables)
     actor_optimizer.apply_gradients(zip(gradients, evaluation_policy.trainable_variables))
     return loss
 
-@tf.function
-def train_critic(state, next_state, reward, done):
-    td0_error = reward
-    if done == 0:
-        td0_error += gamma * tf.squeeze(critic(tf.expand_dims(next_state, axis =0), training=False))
+#@tf.function
+def train_critic(states, rewards, trajectory_len):
+    gae_tensor= tf.TensorArray(dtype = tf.float32, size = trajectory_len)
+    gae = 0
+    lambda_gamma_multiplier = 1
+    end_idx = len(rewards) - 1
+    start_idx = end_idx - trajectory_len
+    tensor_idx = trajectory_len - 1
 
     with tf.GradientTape() as tape:
-        value = tf.squeeze(critic(tf.expand_dims(state, axis =0), training=True))
-        advantage = td0_error - value
-        loss = tf.square(advantage)
+        V = critic(states, training=True)
+
+        for j in tf.range(end_idx, start_idx, delta = -1):
+            V_next = V[j+1] if (j+1) <= end_idx else 0
+            delta = (rewards[j] + gamma * V_next) - V[j]
+            gae += (lambda_gamma_multiplier * delta)
+            lambda_gamma_multiplier *= (gae_lambda * gamma)
+            gae_tensor.write(tensor_idx, gae)
+            tensor_idx -= 1 #filling tensor array from behind, so no need to reverse
+        advantage = gae_tensor.stack()
+        if len(advantage) > 1:
+            advantage = (advantage - tf.reduce_mean(advantage)) / tf.math.reduce_std(advantage) # for shape(1,1) return is NaN
+
+        loss = tf.reduce_mean(tf.square(advantage))
     gradients = tape.gradient(loss, critic.trainable_variables)
     critic_optimizer.apply_gradients(zip(gradients, critic.trainable_variables))
     return loss, advantage
@@ -103,21 +110,24 @@ def train_critic(state, next_state, reward, done):
 GAE(t,L,lambda,gamma) = sum((lambda*gamma)^l*delta(t+l), l = [0...L])
 delta(t) = R(t) + V(t+1) - V(t)
 '''
-def calculate_GAE(rewards, V, dones):
+def calculate_GAE(rewards, V, isTerminal):
     gae_tensor=[]
     gae = 0
     lambda_gamma_multiplier = 1
     end_idx = len(rewards) - 1
-    start_idx = end_idx - gae_minibatch_size - 1 # tf.range end index is not inclusive
+
+    if not isTerminal:
+        end_idx -= 1 # because V[j+1] does not exist for edge case - shift interval back by 1
+    else:
+        V.append(0) # for terminal state there are no future rewards
+
+    start_idx = end_idx - gae_minibatch_size - 1 # tf.range end index(start_idx in this case) is not inclusive
     for j in tf.range(end_idx, start_idx, delta = -1):
-        # tricky part for last element in V memory! V[last_j+1] does not exist! 
-        # If not done, V[last_j+1] = critic(next_observation)
-        # If done, V[last_j+1] = anything - it will be multiply by zero anyway
-        delta = (rewards[j] + gamma * V[j+1] * (1-dones[j])) - V[j] # A(j)(1) = Q(j) - V(j)
-        gae += lambda_gamma_multiplier*delta
-        lambda_gamma_multiplier *= gae_lambda * gamma
+        delta = (rewards[j] + gamma * V[j+1]) - V[j]
+        gae += (lambda_gamma_multiplier * delta)
+        lambda_gamma_multiplier *= (gae_lambda * gamma)
         gae_tensor.append(gae)
-    gae_tensor.reverse()
+    #gae_tensor.reverse() #don't reverse gae tensor. Reversed order is required to update adv in replay buffer, MSE doesn't care about ordering
     gae_tensor = (gae_tensor - np.mean(gae_tensor)) / np.std(gae_tensor)
     return gae_tensor
 
@@ -145,6 +155,7 @@ evaluation_policy.set_weights(target_policy.get_weights())
 tf.random.set_seed(0x12345)
 np.random.random(0)
 rewards_history = []
+total_processed_batches = 0
 
 for i in range(num_episodes):
     done = False
@@ -152,8 +163,11 @@ for i in range(num_episodes):
     critic_loss_history = []
     actor_loss_history = []
     episod_rewards = []
-    value_memory = []
+    states_memory = []
+    actions_memory = []
+    action_prob_memory = []
     epoch_steps = 0
+    processed_batches = 0
 
     while not done:
         #env.render()
@@ -161,32 +175,39 @@ for i in range(num_episodes):
         actions_logits = tf.squeeze(actions_logits)
         actions_distribution = tf.nn.softmax(actions_logits).numpy()
 
-        state_value = critic(np.expand_dims(observation, axis = 0), training=False)
-        value_memory.append(tf.squeeze(state_value))
-
         chosen_action = np.random.choice(env.action_space.n, p=actions_distribution)
         next_observation, reward, done, _ = env.step(chosen_action)
 
         episod_rewards.append(reward)
-        exp_buffer.append([tf.convert_to_tensor(observation, dtype=tf.float32), 
-                           chosen_action, 
-                           actions_distribution[chosen_action],
-                           adv])
+        states_memory.append(tf.convert_to_tensor(observation, dtype=tf.float32))
+        epoch_steps += 1
 
-        if epoch_steps > batch_size:
-            samples = sample_expirience(batch_size)
-            states_tensor = tf.stack(samples[:,0])
-            actions_tensor = tf.convert_to_tensor(samples[:,1], dtype=tf.int32)
-            target_probabilities_tensor = tf.convert_to_tensor(samples[:,2], dtype=tf.float32)
-            advantage_tensor = tf.convert_to_tensor(samples[:,3], dtype=tf.float32)
-            actor_loss = train_actor(states_tensor, actions_tensor, target_probabilities_tensor, advantage_tensor)
-            actor_loss_history.append(actor_loss)
+        # obtain trajectory segment
+        if (epoch_steps > 0 and epoch_steps % batch_size == 0) or done:
+            trajectory_length = batch_size
+            if done:
+                trajectory_length = epoch_steps - processed_batches * batch_size
+            print(f"Trajectory length = {trajectory_length}, processed batches = {processed_batches}")
+            critic_loss, adv = train_critic(tf.stack(states_memory[-trajectory_length:]),
+                                            tf.convert_to_tensor(episod_rewards[-trajectory_length:], dtype=tf.float32), 
+                                            tf.convert_to_tensor(trajectory_length, dtype=tf.int32))
+            #actor_loss = train_actor(states_memory, actions_memory, action_prob_memory, adv)
+            processed_batches += 1
+            total_processed_batches += 1
 
-        if (global_step + 1) % copy_step == 0 and global_step > start_steps:
+        #if epoch_steps > batch_size:
+        #    samples = sample_expirience(batch_size)
+        #    states_tensor = tf.stack(samples[:,0])
+        #    actions_tensor = tf.convert_to_tensor(samples[:,1], dtype=tf.int32)
+        #    target_probabilities_tensor = tf.convert_to_tensor(samples[:,2], dtype=tf.float32)
+        #    advantage_tensor = tf.convert_to_tensor(samples[:,3], dtype=tf.float32)
+        #    actor_loss = train_actor(states_tensor, actions_tensor, target_probabilities_tensor, advantage_tensor)
+        #    actor_loss_history.append(actor_loss)
+
+        #update target policy every 3rd batch or in the end of episode
+        if (total_processed_batches > 0 and total_processed_batches % 3 == 0) or done:
             target_policy.set_weights(evaluation_policy.get_weights())
 
-        epoch_steps += 1
-        global_step += 1
         observation = next_observation
 
     #if i % checkpoint_step == 0 and i > 0:
