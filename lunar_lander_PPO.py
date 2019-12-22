@@ -3,19 +3,12 @@ import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 import os
-from collections import deque
 
 # prevent TensorFlow of allocating whole GPU memory
 gpus = tf.config.experimental.list_physical_devices('GPU')
 tf.config.experimental.set_memory_growth(gpus[0], True)
 
 env = gym.make('LunarLander-v2')
-
-# apply gradients (with clipping)
-#grads = tf.gradients(loss, tf.trainable_variables())
-#grads, _ = tf.clip_by_global_norm(grads, 50) # gradient clipping
-#grads_and_vars = list(zip(grads, tf.trainable_variables()))
-#train_op = optimizer.apply_gradients(grads_and_vars)
 
 num_episodes = 5000
 actor_learning_rate = 0.001
@@ -27,10 +20,9 @@ gamma = 0.99
 gae_lambda = 0.95
 entropy_beta = 0.01
 
+lambda_gamma_constant = tf.constant(gae_lambda * gamma, dtype=tf.float32)
+
 checkpoint_step = 500
-copy_step = 50
-steps_train = 4
-start_steps = 1000
 
 outputs_count = env.action_space.n
 
@@ -39,6 +31,7 @@ critic_checkpoint_file_name = 'll_ppo_critic_checkpoint.h5'
 
 actor_optimizer = tf.keras.optimizers.Adam(actor_learning_rate)
 critic_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
+mse_loss = tf.keras.losses.MeanSquaredError()
 
 def policy_network():
     input = keras.layers.Input(shape=(None, X_shape))
@@ -59,7 +52,7 @@ def value_network():
     model = keras.Model(inputs=input, outputs=v_layer)
     return model
 
-@tf.function
+@tf.function(experimental_relax_shapes=True)
 def train_actor(states, actions, target_distributions, adv):
     one_hot_actions_mask = tf.one_hot(actions, depth=outputs_count, on_value = 1.0, off_value = 0.0, dtype=tf.float32)
 
@@ -78,31 +71,39 @@ def train_actor(states, actions, target_distributions, adv):
     actor_optimizer.apply_gradients(zip(gradients, evaluation_policy.trainable_variables))
     return loss
 
-#@tf.function
+#@tf.function(experimental_relax_shapes=True)
 def train_critic(states, rewards, trajectory_len):
-    gae_tensor= tf.TensorArray(dtype = tf.float32, size = trajectory_len)
-    gae = 0
-    lambda_gamma_multiplier = 1
+    V_target = tf.TensorArray(dtype = tf.float32, size = trajectory_len)
+    V_target_idx = 0
+    
+    gae_tensor = tf.TensorArray(dtype = tf.float32, size = trajectory_len)
+    gae_tensor_idx = trajectory_len - 1
+    gae = 0.
+    gae_power = 0.
+    
     end_idx = len(rewards) - 1
     start_idx = end_idx - trajectory_len
-    tensor_idx = trajectory_len - 1
 
     with tf.GradientTape() as tape:
         V = critic(states, training=True)
 
         for j in tf.range(end_idx, start_idx, delta = -1):
-            V_next = V[j+1] if (j+1) <= end_idx else 0
-            delta = (rewards[j] + gamma * V_next) - V[j]
-            gae += (lambda_gamma_multiplier * delta)
-            lambda_gamma_multiplier *= (gae_lambda * gamma)
-            gae_tensor.write(tensor_idx, gae)
-            tensor_idx -= 1 #filling tensor array from behind, so no need to reverse
+            V_next = V[j+1] if (j+1) <= end_idx else tf.constant(0., dtype=tf.float32, shape=(1,))
+            delta = rewards[j] + gamma * V_next
+            V_target.write(V_target_idx, delta)
+            gae += tf.math.pow(lambda_gamma_constant, gae_power) * tf.squeeze(delta - V[j])
+            gae_tensor.write(gae_tensor_idx, gae)
+            
+            gae_tensor_idx -= 1 #filling tensor array from behind, so no need to reverse
+            V_target_idx += 1
+            gae_power += 1
         advantage = gae_tensor.stack()
         if len(advantage) > 1:
             advantage = (advantage - tf.reduce_mean(advantage)) / tf.math.reduce_std(advantage) # for shape(1,1) return is NaN
 
-        loss = tf.reduce_mean(tf.square(advantage))
-    gradients = tape.gradient(loss, critic.trainable_variables)
+        loss = mse_loss(V_target.stack(), V)
+        #loss = tf.reduce_mean(tf.square(advantage))
+    gradients = tape.gradient(loss, critic.trainable_variables) #switching to tf varibles broke gradients
     critic_optimizer.apply_gradients(zip(gradients, critic.trainable_variables))
     return loss, advantage
 
@@ -131,10 +132,6 @@ def calculate_GAE(rewards, V, isTerminal):
     gae_tensor = (gae_tensor - np.mean(gae_tensor)) / np.std(gae_tensor)
     return gae_tensor
 
-def sample_expirience(batch_size):
-    perm_batch = np.random.permutation(len(exp_buffer))[:batch_size]
-    return np.array(exp_buffer)[perm_batch]
-
 if os.path.isfile(actor_checkpoint_file_name):
     target_policy = keras.models.load_model(checkpoint_file_name)
     print("Model restored from checkpoint.")
@@ -154,14 +151,16 @@ evaluation_policy.set_weights(target_policy.get_weights())
 
 tf.random.set_seed(0x12345)
 np.random.random(0)
+
 rewards_history = []
-total_processed_batches = 0
+copy_batch_step = 0
 
 for i in range(num_episodes):
     done = False
     observation = env.reset()
     critic_loss_history = []
     actor_loss_history = []
+
     episod_rewards = []
     states_memory = []
     actions_memory = []
@@ -180,32 +179,32 @@ for i in range(num_episodes):
 
         episod_rewards.append(reward)
         states_memory.append(tf.convert_to_tensor(observation, dtype=tf.float32))
+        actions_memory.append(chosen_action)
+        action_prob_memory.append(actions_distribution[chosen_action])
         epoch_steps += 1
 
-        # obtain trajectory segment
+        # obtain trajectory segment and train networks
         if (epoch_steps > 0 and epoch_steps % batch_size == 0) or done:
             trajectory_length = batch_size
             if done:
                 trajectory_length = epoch_steps - processed_batches * batch_size
-            print(f"Trajectory length = {trajectory_length}, processed batches = {processed_batches}")
             critic_loss, adv = train_critic(tf.stack(states_memory[-trajectory_length:]),
                                             tf.convert_to_tensor(episod_rewards[-trajectory_length:], dtype=tf.float32), 
                                             tf.convert_to_tensor(trajectory_length, dtype=tf.int32))
-            #actor_loss = train_actor(states_memory, actions_memory, action_prob_memory, adv)
+            critic_loss_history.append(critic_loss)
+
+            actor_loss = train_actor(tf.stack(states_memory[-trajectory_length:]),
+                                     tf.convert_to_tensor(actions_memory[-trajectory_length:], dtype=tf.int32), 
+                                     tf.convert_to_tensor(action_prob_memory[-trajectory_length:], dtype=tf.float32),
+                                     adv)
+            actor_loss_history.append(actor_loss)
+
             processed_batches += 1
-            total_processed_batches += 1
+            copy_batch_step += 1
 
-        #if epoch_steps > batch_size:
-        #    samples = sample_expirience(batch_size)
-        #    states_tensor = tf.stack(samples[:,0])
-        #    actions_tensor = tf.convert_to_tensor(samples[:,1], dtype=tf.int32)
-        #    target_probabilities_tensor = tf.convert_to_tensor(samples[:,2], dtype=tf.float32)
-        #    advantage_tensor = tf.convert_to_tensor(samples[:,3], dtype=tf.float32)
-        #    actor_loss = train_actor(states_tensor, actions_tensor, target_probabilities_tensor, advantage_tensor)
-        #    actor_loss_history.append(actor_loss)
-
-        #update target policy every 3rd batch or in the end of episode
-        if (total_processed_batches > 0 and total_processed_batches % 3 == 0) or done:
+        #update target policy every 4th batch or in the end of episode
+        if (copy_batch_step > 0 and copy_batch_step % 3 == 0) or done:
+            copy_batch_step = 0
             target_policy.set_weights(evaluation_policy.get_weights())
 
         observation = next_observation
