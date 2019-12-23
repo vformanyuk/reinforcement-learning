@@ -11,7 +11,7 @@ tf.config.experimental.set_memory_growth(gpus[0], True)
 env = gym.make('LunarLander-v2')
 
 num_episodes = 5000
-actor_learning_rate = 0.001
+actor_learning_rate = 0.0005
 critic_learning_rate = 0.0005
 clipping_epsilon = 0.2
 batch_size = 64
@@ -71,14 +71,14 @@ def train_actor(states, actions, target_distributions, adv):
     actor_optimizer.apply_gradients(zip(gradients, evaluation_policy.trainable_variables))
     return loss
 
+gae = tf.Variable(0., dtype = tf.float32, trainable=False)
 #@tf.function(experimental_relax_shapes=True)
 def train_critic(states, rewards, trajectory_len):
-    V_target = tf.TensorArray(dtype = tf.float32, size = trajectory_len)
-    V_target_idx = 0
-    
+    V_target_tensor = tf.TensorArray(dtype = tf.float32, size = trajectory_len)
     gae_tensor = tf.TensorArray(dtype = tf.float32, size = trajectory_len)
-    gae_tensor_idx = trajectory_len - 1
-    gae = 0.
+    
+    tensor_idx = trajectory_len - 1
+    gae.assign(0.)
     gae_power = 0.
     
     end_idx = len(rewards) - 1
@@ -89,21 +89,30 @@ def train_critic(states, rewards, trajectory_len):
 
         for j in tf.range(end_idx, start_idx, delta = -1):
             V_next = V[j+1] if (j+1) <= end_idx else tf.constant(0., dtype=tf.float32, shape=(1,))
-            delta = rewards[j] + gamma * V_next
-            V_target.write(V_target_idx, delta)
-            gae += tf.math.pow(lambda_gamma_constant, gae_power) * tf.squeeze(delta - V[j])
-            gae_tensor.write(gae_tensor_idx, gae)
+            delta = rewards[j] + gamma * V_next # Q
             
-            gae_tensor_idx -= 1 #filling tensor array from behind, so no need to reverse
-            V_target_idx += 1
+            current_gae = gae.assign_add(tf.math.pow(lambda_gamma_constant, gae_power) * tf.squeeze(delta - V[j])) #A = Q - V
+            #gae += tf.math.pow(lambda_gamma_constant, gae_power) * tf.squeeze(delta - V[j])
+            gae_tensor.write(tensor_idx, current_gae)
+            V_target_tensor.write(tensor_idx, delta)
+            
+            tensor_idx -= 1 #filling tensor array from behind, so no need to reverse
             gae_power += 1
-        advantage = gae_tensor.stack()
-        if len(advantage) > 1:
-            advantage = (advantage - tf.reduce_mean(advantage)) / tf.math.reduce_std(advantage) # for shape(1,1) return is NaN
 
-        loss = mse_loss(V_target.stack(), V)
-        #loss = tf.reduce_mean(tf.square(advantage))
-    gradients = tape.gradient(loss, critic.trainable_variables) #switching to tf varibles broke gradients
+        advantage = gae_tensor.stack()
+        if trajectory_len > 1:
+            advantage = (advantage - tf.reduce_mean(advantage)) / tf.math.reduce_std(advantage)
+        else:
+            advantage = tf.clip_by_value(advantage, -1., 1.) #std for shape(1) = 0
+        advantage = tf.debugging.check_numerics(advantage, 'advantage contain NaNs')
+
+        v_target_ = V_target_tensor.stack()
+        #if len(v_target_) > 1:
+        #    v_target_ = (v_target_ - tf.reduce_mean(v_target_)) / tf.math.reduce_std(v_target_)
+        #v_target_ = tf.debugging.check_numerics(v_target_,'v_target_ contain NaNs')
+
+        loss = mse_loss(v_target_, V)
+    gradients = tape.gradient(loss, critic.trainable_variables)
     critic_optimizer.apply_gradients(zip(gradients, critic.trainable_variables))
     return loss, advantage
 
@@ -192,7 +201,7 @@ for i in range(num_episodes):
                                             tf.convert_to_tensor(episod_rewards[-trajectory_length:], dtype=tf.float32), 
                                             tf.convert_to_tensor(trajectory_length, dtype=tf.int32))
             critic_loss_history.append(critic_loss)
-
+            #print(str(adv))
             actor_loss = train_actor(tf.stack(states_memory[-trajectory_length:]),
                                      tf.convert_to_tensor(actions_memory[-trajectory_length:], dtype=tf.int32), 
                                      tf.convert_to_tensor(action_prob_memory[-trajectory_length:], dtype=tf.float32),
@@ -203,7 +212,7 @@ for i in range(num_episodes):
             copy_batch_step += 1
 
         #update target policy every 4th batch or in the end of episode
-        if (copy_batch_step > 0 and copy_batch_step % 3 == 0) or done:
+        if (copy_batch_step > 0 and copy_batch_step % 2 == 0) or done:
             copy_batch_step = 0
             target_policy.set_weights(evaluation_policy.get_weights())
 
