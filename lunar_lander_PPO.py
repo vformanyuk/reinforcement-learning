@@ -11,10 +11,10 @@ tf.config.experimental.set_memory_growth(gpus[0], True)
 env = gym.make('LunarLander-v2')
 
 num_episodes = 5000
-actor_learning_rate = 0.0001
-critic_learning_rate = 0.0005
+actor_learning_rate = 0.001
+critic_learning_rate = 0.0001
 clipping_epsilon = 0.2
-batch_size = 64
+batch_size = 32
 X_shape = (env.observation_space.shape[0])
 gamma = 0.99
 gae_lambda = 0.95
@@ -33,6 +33,9 @@ actor_optimizer = tf.keras.optimizers.Adam(actor_learning_rate)
 critic_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
 mse_loss = tf.keras.losses.MeanSquaredError()
 
+tf.random.set_seed(0x12345)
+np.random.random(0)
+
 def policy_network():
     input = keras.layers.Input(shape=(None, X_shape))
     x = keras.layers.Dense(256, activation='relu')(input)
@@ -46,7 +49,7 @@ def policy_network():
 def value_network():
     input = keras.layers.Input(shape=(None, X_shape))
     x = keras.layers.Dense(512, activation='relu')(input)
-    x = keras.layers.Dense(128, activation='relu', kernel_regularizer=keras.regularizers.l2(0.001))(x)
+    x = keras.layers.Dense(128, activation='relu')(x) #, kernel_regularizer=keras.regularizers.l2(0.001))(x)
     v_layer = keras.layers.Dense(1, activation='linear')(x)
 
     model = keras.Model(inputs=input, outputs=v_layer)
@@ -60,17 +63,18 @@ def train_actor(states, actions, target_distributions, adv):
         action_logits = tf.squeeze(evaluation_policy(states, training=True))
         evalution_distribution = tf.nn.softmax(action_logits)
 
-        with tape.stop_recording():
-            evalution_log_distribution = tf.nn.log_softmax(action_logits)
-            entropy = -tf.reduce_sum(evalution_log_distribution * evalution_distribution)
+        #with tape.stop_recording():
+        #    evalution_log_distribution = tf.nn.log_softmax(action_logits)
+        #    entropy = -tf.reduce_sum(evalution_log_distribution * evalution_distribution)
 
         r = tf.reduce_sum(evalution_distribution * one_hot_actions_mask, axis=1) / target_distributions
         r_clipped = tf.clip_by_value(r, 1 - clipping_epsilon, 1 + clipping_epsilon)
-        loss = -tf.reduce_mean(tf.math.minimum(r * adv, r_clipped * adv)) + entropy_beta * entropy
+        loss = -tf.reduce_mean(tf.math.minimum(r * adv, r_clipped * adv))# + entropy_beta * entropy
     gradients = tape.gradient(loss, evaluation_policy.trainable_variables)
     actor_optimizer.apply_gradients(zip(gradients, evaluation_policy.trainable_variables))
     return loss
 
+v_target = tf.Variable(0., dtype = tf.float32, trainable=False)
 gae = tf.Variable(0., dtype = tf.float32, trainable=False) # tf.function can not define variables
 @tf.function(experimental_relax_shapes=True)
 def train_critic(states, rewards, trajectory_len):
@@ -79,7 +83,7 @@ def train_critic(states, rewards, trajectory_len):
     
     tensor_idx = trajectory_len - 1
     gae.assign(0.)
-    gae_power = 0.
+    v_target.assign(0.)
     
     end_idx = len(rewards) - 1
     start_idx = end_idx - trajectory_len
@@ -89,24 +93,26 @@ def train_critic(states, rewards, trajectory_len):
 
         for j in tf.range(end_idx, start_idx, delta = -1):
             V_next = V[j+1] if (j+1) <= end_idx else tf.constant(0., dtype=tf.float32, shape=(1,))
-            delta = rewards[j] + gamma * V_next # Q
+            delta = rewards[j] + gamma * V_next - V[j]
             
-            current_gae = gae.assign_add(tf.math.pow(lambda_gamma_constant, gae_power) * tf.squeeze(delta - V[j])) # A = Q - V
-            # IMPORTANT!! TensorArray.write method returns NEW TensorArray instance in _graph_ mode
+            current_gae = gae.assign(tf.squeeze(delta) + lambda_gamma_constant * gae.value())
+            current_v_target = v_target.assign(rewards[j] + gamma * v_target.value())
             gae_tensor = gae_tensor.write(tensor_idx, current_gae)
-            V_target_tensor = V_target_tensor.write(tensor_idx, delta)
+            V_target_tensor = V_target_tensor.write(tensor_idx, current_v_target)
             
             tensor_idx -= 1 #filling tensor array from behind, so no need to reverse
-            gae_power += 1
 
         advantage = gae_tensor.stack()
         if trajectory_len > 1:
             advantage = (advantage - tf.reduce_mean(advantage)) / tf.math.reduce_std(advantage)
         else:
             advantage = tf.clip_by_value(advantage, -1., 1.)
-        #advantage = tf.debugging.check_numerics(advantage, 'advantage contain NaNs')
 
         v_target_ = V_target_tensor.stack()
+        if trajectory_len > 1:
+            v_target_ = (v_target_ - tf.reduce_mean(v_target_)) / tf.math.reduce_std(v_target_)
+        else:
+            v_target_ = tf.clip_by_value(v_target_, -1., 1.)
 
         loss = mse_loss(v_target_, V)
     gradients = tape.gradient(loss, critic.trainable_variables)
@@ -129,9 +135,6 @@ else:
 
 evaluation_policy = policy_network()
 evaluation_policy.set_weights(target_policy.get_weights())
-
-tf.random.set_seed(0x12345)
-np.random.random(0)
 
 rewards_history = []
 copy_batch_step = 0
