@@ -11,7 +11,7 @@ tf.config.experimental.set_memory_growth(gpus[0], True)
 env = gym.make('LunarLander-v2')
 
 num_episodes = 50000
-actor_learning_rate = 0.0001
+actor_learning_rate = 0.0005
 critic_learning_rate = 0.0005
 clipping_epsilon = 0.2
 batch_size = 2048
@@ -81,32 +81,6 @@ def train_actor(states, actions, target_distributions, adv):
     actor_optimizer.apply_gradients(zip(gradients, evaluation_policy.trainable_variables))
     return loss
 
-#@tf.function
-#def train_critic(states, rewards, dones):
-#    V_target_tensor = tf.TensorArray(dtype = tf.float32, size = batch_size)
-#    gae_tensor = tf.TensorArray(dtype = tf.float32, size = batch_size)
-    
-#    tensor_idx = batch_size - 1
-#    gae = 0.
-#    end_idx = len(rewards) - 1
-
-#    with tf.GradientTape() as tape:
-#        V = critic(states, training=True)
-#        for j in tf.range(end_idx, -1, delta = -1):
-#            V_next = V[j+1] if (j+1) <= end_idx else tf.constant(0., dtype=tf.float32, shape=(1,))
-#            delta = rewards[j] + gamma * V_next * (1-dones[j])
-#            gae = tf.squeeze(delta - V[j]) + lambda_gamma_constant * (1-dones[j]) * gae
-#            gae_tensor = gae_tensor.write(tensor_idx, gae)
-#            V_target_tensor = V_target_tensor.write(tensor_idx, delta)
-#            tensor_idx -= 1 #filling tensor array from behind, so no need to reverse
-#        advantage = gae_tensor.stack()
-#        advantage = (advantage - tf.reduce_mean(advantage)) / tf.math.reduce_std(advantage)
-        
-#        loss = mse_loss(V_target_tensor.stack(), V)
-#    gradients = tape.gradient(loss, critic.trainable_variables)
-#    critic_optimizer.apply_gradients(zip(gradients, critic.trainable_variables))
-#    return loss, advantage
-
 gae = tf.Variable(0., dtype = tf.float32, trainable=False)
 @tf.function
 def train_critic(states, rewards, dones):
@@ -120,10 +94,10 @@ def train_critic(states, rewards, dones):
         V = critic(states, training=True)
         for j in tf.range(end_idx, -1, delta = -1):
             V_next = V[j+1] if (j+1) <= end_idx else tf.constant(0., dtype=tf.float32, shape=(1,))
-            delta = rewards[j] + gamma * V_next * (1-dones[j]) - V[j]
+            delta = rewards[j] + gamma * V_next * (1-dones[j]) - V[j] # TD(0)_Error
             current_gae = gae.assign(tf.squeeze(delta) + lambda_gamma_constant * (1-dones[j]) * gae.value())
-            # '+V[j]' cancels out V[j] in delta. Returns[t] = (rewards[t] + gamma*V[t+1]) + A^[t] => Q[t]
-            returns_tensor = returns_tensor.write(tensor_idx, current_gae + V[j])
+            # Returns[t] = (rewards[t] + gamma*V[t+1]) + A^[t] => Q[t]
+            returns_tensor = returns_tensor.write(tensor_idx, current_gae + V[j]) # adding V[j] makes TD_Target from TD_Error
             tensor_idx -= 1
         returns = returns_tensor.stack()
         advantage = returns - V # A = Q - V
