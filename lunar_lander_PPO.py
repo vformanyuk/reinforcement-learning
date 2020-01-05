@@ -187,9 +187,9 @@ for epoc in range(num_episodes):
             print(f'=============  Actor loss: {np.mean(actor_loss_history):.4f} Critic loss: {np.mean(critic_loss_history):.4f}  =============')
         observation = next_observation
 
-    #if epoc % checkpoint_step == 0 and epoc > 0:
-    #    target_policy.save(actor_checkpoint_file_name)
-    #    critic.save(critic_checkpoint_file_name)
+    if epoc % checkpoint_step == 0 and epoc > 0:
+        target_policy.save(actor_checkpoint_file_name)
+        critic.save(critic_checkpoint_file_name)
 
     total_episod_reward = sum(episod_rewards)
     rewards_history.append(total_episod_reward)
