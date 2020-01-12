@@ -62,26 +62,21 @@ def policy_network():
 
 def critic_network():
     actions_input = keras.layers.Input(batch_shape=(batch_size, outputs_count))
-    y = keras.layers.Dense(300, activation='relu', 
-                           kernel_initializer = keras.initializers.VarianceScaling(scale=0.3, mode='fan_in', distribution='uniform', seed=RND_SEED),
-                           bias_initializer = keras.initializers.VarianceScaling(scale=0.3, mode='fan_in', distribution='uniform', seed=RND_SEED),
-                           kernel_regularizer = keras.regularizers.l2(0.01),
-                           bias_regularizer = keras.regularizers.l2(0.01))(actions_input)
-
     input = keras.layers.Input(batch_shape=(batch_size, X_shape))
+
     x = keras.layers.Dense(400, activation='relu', 
                            kernel_initializer = keras.initializers.VarianceScaling(scale=0.3, mode='fan_in', distribution='uniform', seed=RND_SEED),
                            bias_initializer = keras.initializers.VarianceScaling(scale=0.3, mode='fan_in', distribution='uniform', seed=RND_SEED),
                            kernel_regularizer = keras.regularizers.l2(0.01),
                            bias_regularizer = keras.regularizers.l2(0.01))(input)
     x = keras.layers.BatchNormalization()(x)
+    x = keras.layers.Concatenate()([x, actions_input])
     x = keras.layers.Dense(300, activation='relu', 
                            kernel_initializer = keras.initializers.VarianceScaling(scale=0.3, mode='fan_in', distribution='uniform', seed=RND_SEED),
                            bias_initializer = keras.initializers.VarianceScaling(scale=0.3, mode='fan_in', distribution='uniform', seed=RND_SEED),
                            kernel_regularizer = keras.regularizers.l2(0.01),
                            bias_regularizer = keras.regularizers.l2(0.01))(x)
     x = keras.layers.BatchNormalization()(x)
-    x = keras.layers.Add()([x,y])
     q_layer = keras.layers.Dense(1, activation='linear',
                                 kernel_initializer = keras.initializers.RandomUniform(minval= -0.003, maxval=0.003, seed=RND_SEED),
                                 bias_initializer = keras.initializers.RandomUniform(minval= -0.003, maxval=0.003, seed=RND_SEED),
@@ -119,14 +114,14 @@ def soft_update_models():
     actor_weights = actor.get_weights()
     updated_actor_weights = []
     for aw,taw in zip(actor_weights,target_actor_weights):
-        updated_actor_weights.append(tau * aw + (1-tau) * taw)
+        updated_actor_weights.append(tau * aw + (1.0 - tau) * taw)
     target_policy.set_weights(updated_actor_weights)
 
     target_critic_weights = target_critic.get_weights()
     critic_weights = critic.get_weights()
     updated_critic_weights = []
     for cw,tcw in zip(critic_weights,target_critic_weights):
-        updated_critic_weights.append(tau*cw + (1-tau)*tcw)
+        updated_critic_weights.append(tau * cw + (1.0 - tau) * tcw)
     target_critic.set_weights(updated_critic_weights)
 
 if os.path.isfile(actor_checkpoint_file_name):
@@ -156,7 +151,6 @@ rewards_history = []
 for i in range(num_episodes):
     done = False
     observation = env.reset()
-    #action_noise.reset()
 
     episodic_reward = 0
     epoch_steps = 0
