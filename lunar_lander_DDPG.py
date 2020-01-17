@@ -3,8 +3,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 import os
-from collections import deque
-from rl_utils import OUActionNoise
+from rl_utils import OUActionNoise, SARST_RandomAccess_MemoryBuffer
 
 # prevent TensorFlow of allocating whole GPU memory
 gpus = tf.config.experimental.list_physical_devices('GPU')
@@ -29,8 +28,6 @@ max_epoch_steps = 1000
 global_step = 0
 steps_train = 4
 
-exp_buffer_capacity = 1000000
-
 actor_checkpoint_file_name = 'll_ddpg_actor_checkpoint.h5'
 critic_checkpoint_file_name = 'll_ddpg_critic_checkpoint.h5'
 
@@ -43,16 +40,20 @@ action_noise = OUActionNoise(mu=np.zeros(outputs_count))
 tf.random.set_seed(RND_SEED)
 np.random.random(RND_SEED)
 
+exp_buffer_capacity = 1000000
+
+exp_buffer = SARST_RandomAccess_MemoryBuffer(exp_buffer_capacity, env.observation_space.shape, env.action_space.shape)
+
 def policy_network():
-    input = keras.layers.Input(batch_shape=(batch_size, X_shape))
+    input = keras.layers.Input(shape=(X_shape))
     x = keras.layers.Dense(400, activation='relu', 
                            kernel_initializer = keras.initializers.VarianceScaling(scale=0.3, mode='fan_in', distribution='uniform', seed=RND_SEED),
                            bias_initializer = keras.initializers.VarianceScaling(scale=0.3, mode='fan_in', distribution='uniform', seed=RND_SEED))(input)
-    x = keras.layers.BatchNormalization()(x)
+    #x = keras.layers.BatchNormalization()(x)
     x = keras.layers.Dense(300, activation='relu', 
                            kernel_initializer = keras.initializers.VarianceScaling(scale=0.3, mode='fan_in', distribution='uniform', seed=RND_SEED),
                            bias_initializer = keras.initializers.VarianceScaling(scale=0.3, mode='fan_in', distribution='uniform', seed=RND_SEED))(x)
-    x = keras.layers.BatchNormalization()(x)
+    #x = keras.layers.BatchNormalization()(x)
     output = keras.layers.Dense(outputs_count, activation='tanh',
                                 kernel_initializer = keras.initializers.RandomUniform(minval= -0.003, maxval=0.003, seed=RND_SEED),
                                 bias_initializer = keras.initializers.RandomUniform(minval= -0.003, maxval=0.003, seed=RND_SEED))(x)
@@ -61,22 +62,22 @@ def policy_network():
     return model
 
 def critic_network():
-    actions_input = keras.layers.Input(batch_shape=(batch_size, outputs_count))
-    input = keras.layers.Input(batch_shape=(batch_size, X_shape))
+    actions_input = keras.layers.Input(shape=(outputs_count))
+    input = keras.layers.Input(shape=(X_shape))
 
     x = keras.layers.Dense(400, activation='relu', 
                            kernel_initializer = keras.initializers.VarianceScaling(scale=0.3, mode='fan_in', distribution='uniform', seed=RND_SEED),
                            bias_initializer = keras.initializers.VarianceScaling(scale=0.3, mode='fan_in', distribution='uniform', seed=RND_SEED),
                            kernel_regularizer = keras.regularizers.l2(0.01),
                            bias_regularizer = keras.regularizers.l2(0.01))(input)
-    x = keras.layers.BatchNormalization()(x)
+    #x = keras.layers.BatchNormalization()(x)
     x = keras.layers.Concatenate()([x, actions_input])
     x = keras.layers.Dense(300, activation='relu', 
                            kernel_initializer = keras.initializers.VarianceScaling(scale=0.3, mode='fan_in', distribution='uniform', seed=RND_SEED),
                            bias_initializer = keras.initializers.VarianceScaling(scale=0.3, mode='fan_in', distribution='uniform', seed=RND_SEED),
                            kernel_regularizer = keras.regularizers.l2(0.01),
                            bias_regularizer = keras.regularizers.l2(0.01))(x)
-    x = keras.layers.BatchNormalization()(x)
+    #x = keras.layers.BatchNormalization()(x)
     q_layer = keras.layers.Dense(1, activation='linear',
                                 kernel_initializer = keras.initializers.RandomUniform(minval= -0.003, maxval=0.003, seed=RND_SEED),
                                 bias_initializer = keras.initializers.RandomUniform(minval= -0.003, maxval=0.003, seed=RND_SEED),
@@ -104,10 +105,6 @@ def train_actor_critic(states, actions, next_states, rewards, dones):
     gradients = tape.gradient(a_loss, actor.trainable_variables)
     actor_optimizer.apply_gradients(zip(gradients, actor.trainable_variables))
     return a_loss, c_loss
-
-def sample_expirience(batch_size):
-    perm_batch = np.random.permutation(len(exp_buffer))[:batch_size]
-    return np.array(exp_buffer)[perm_batch]
 
 def soft_update_models():
     target_actor_weights = target_policy.get_weights()
@@ -144,8 +141,6 @@ target_policy.set_weights(actor.get_weights())
 target_critic = critic_network()
 target_critic.set_weights(critic.get_weights())
 
-exp_buffer = deque(maxlen=exp_buffer_capacity)
-
 rewards_history = []
 
 for i in range(num_episodes):
@@ -162,21 +157,12 @@ for i in range(num_episodes):
         #env.render()
         chosen_action = actor(np.expand_dims(observation, axis = 0), training=False)[0].numpy() + action_noise()
         next_observation, reward, done, _ = env.step(chosen_action)
-        exp_buffer.append([tf.convert_to_tensor(observation, dtype=tf.float32),
-                           tf.convert_to_tensor(chosen_action, dtype=tf.float32),
-                           tf.convert_to_tensor(next_observation, dtype=tf.float32),
-                           reward,
-                           float(done)])
-        
-        if global_step > 10*batch_size and global_step % steps_train == 0:
-            samples = sample_expirience(batch_size)
-            states_tensor = tf.stack(samples[:,0])
-            actions_tensor = tf.stack(samples[:,1])
-            next_states_tensor = tf.stack(samples[:,2])
-            rewards_tensor = tf.convert_to_tensor(samples[:,3], dtype=tf.float32)
-            dones_tensor = tf.convert_to_tensor(samples[:,4], dtype=tf.float32)
-            
-            actor_loss, critic_loss = train_actor_critic(states_tensor, actions_tensor, next_states_tensor, rewards_tensor, dones_tensor)
+
+        exp_buffer.store(observation, chosen_action, next_observation, reward, float(done))
+
+        if global_step > 10 * batch_size and global_step % steps_train == 0:
+            actor_loss, critic_loss = train_actor_critic(*exp_buffer(batch_size))
+
             actor_loss_history.append(actor_loss)
             critic_loss_history.append(critic_loss)
             
@@ -186,6 +172,10 @@ for i in range(num_episodes):
         global_step+=1
         epoch_steps+=1
         episodic_reward += reward
+
+    if i % checkpoint_step == 0 and i > 0:
+        actor.save(actor_checkpoint_file_name)
+        critic.save(critic_checkpoint_file_name)
 
     rewards_history.append(episodic_reward)
     last_mean = np.mean(rewards_history[-100:])
