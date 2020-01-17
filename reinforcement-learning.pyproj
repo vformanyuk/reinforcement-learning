@@ -4,7 +4,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>9e5b33f6-4bd8-4f6d-8f56-78c4ed632669</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>lunar_lander_PPO.py</StartupFile>
+    <StartupFile>lunar_lander_DDPG.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
@@ -28,6 +28,9 @@
     <Compile Include="lunar_lander_ActorCritic.py">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="lunar_lander_DDPG.py">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Include="lunar_lander_doubleDQN.py" />
     <Compile Include="lunar_lander_double_dueling_DQN.py" />
     <Compile Include="lunar_lander_double_dueling_DQN_IS.py" />
@@ -39,6 +42,9 @@
     <Compile Include="per\cartpole_per.py" />
     <Compile Include="per\prioritized_memory.py" />
     <Compile Include="per\SumTree.py" />
+    <Compile Include="rl_utils.py">
+      <SubType>Code</SubType>
+    </Compile>
   </ItemGroup>
   <ItemGroup>
     <Folder Include="per\" />
