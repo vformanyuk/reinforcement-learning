@@ -35,9 +35,9 @@ checkpoint_step = 500
 max_epoch_steps = 1000
 global_step = 0
 
-actor_checkpoint_file_name = 'll_td3_actor_checkpoint.h5'
-critic_1_checkpoint_file_name = 'll_td3_critic1_checkpoint.h5'
-critic_2_checkpoint_file_name = 'll_td3_critic2_checkpoint.h5'
+actor_checkpoint_file_name = 'll_sac_actor_checkpoint.h5'
+critic_1_checkpoint_file_name = 'll_sac_critic1_checkpoint.h5'
+critic_2_checkpoint_file_name = 'll_sac_critic2_checkpoint.h5'
 
 actor_optimizer = tf.keras.optimizers.Adam(actor_learning_rate)
 critic_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
@@ -83,11 +83,24 @@ def critic_network():
     model = keras.Model(inputs=[input, actions_input], outputs=q_layer)
     return model
 
+'''
+SAC uses action reparametrization to avoid expectation over action.
+So action is represented by squashed (tanh in this case) Normal distribution
+'''
 @tf.function
 def get_actions(mu, log_sigma, noise=None):
     if noise is None:
         noise = gaus_distr.sample()
     return tf.math.tanh(mu + tf.math.exp(log_sigma) * noise)
+
+@tf.function
+def get_log_probs(mu, sigma, actions):
+    action_distributions = tfp.distributions.Normal(mu,sigma)
+    z = gaus_distr.sample()
+    # appendix C of the SAC paper discribe applyed boundings which is log(1-tanh(u)^2)
+    log_probs = tf.reduce_mean(action_distributions.log_prob(mu + sigma*z) - \
+                tf.math.log(1 - tf.math.pow(actions, 2) + action_bounds_epsilon), axis=1)
+    return log_probs
 
 @tf.function
 def train_critics(states, actions, next_states, rewards, dones):
@@ -102,11 +115,7 @@ def train_critics(states, actions, next_states, rewards, dones):
     min_q = tf.squeeze(min_q, axis=1)
 
     sigma = tf.math.exp(log_sigma)
-    action_distributions = tfp.distributions.Normal(mu,sigma)
-    z = gaus_distr.sample()
-
-    log_probs = tf.reduce_mean(action_distributions.log_prob(mu + sigma*z) - \
-                tf.math.log(1 - tf.math.pow(target_actions, 2) + action_bounds_epsilon), axis=1) # appendix C of the SAC paper
+    log_probs = get_log_probs(mu, sigma, target_actions)
     next_values = min_q - tf.math.exp(alpha_log) * log_probs # min(Q1^,Q2^) - alpha * logPi
 
     target_q = rewards + gamma * (1 - dones) * next_values
@@ -135,15 +144,11 @@ def train_actor(states):
         target_actions = get_actions(mu, log_sigma)
         
         target_q = tf.math.minimum(critic_1([states, target_actions], training=False), \
-                                    critic_2([states, target_actions], training=False))
+                                   critic_2([states, target_actions], training=False))
         target_q = tf.squeeze(target_q, axis=1)
         
         sigma = tf.math.exp(log_sigma)
-        action_distributions = tfp.distributions.Normal(mu,sigma)
-        z = gaus_distr.sample()
-
-        log_probs = tf.reduce_mean(action_distributions.log_prob(mu + sigma*z) - \
-                    tf.math.log(1 - tf.math.pow(target_actions, 2) + action_bounds_epsilon), axis=1)
+        log_probs = get_log_probs(mu, sigma, target_actions)
 
         actor_loss = tf.reduce_mean(alpha * log_probs - target_q)
         
@@ -235,10 +240,10 @@ for i in range(num_episodes):
         epoch_steps+=1
         episodic_reward += reward
 
-    #if i % checkpoint_step == 0 and i > 0:
-    #    actor.save(actor_checkpoint_file_name)
-    #    critic_1.save(critic_1_checkpoint_file_name)
-    #    critic_2.save(critic_2_checkpoint_file_name)
+    if i % checkpoint_step == 0 and i > 0:
+        actor.save(actor_checkpoint_file_name)
+        critic_1.save(critic_1_checkpoint_file_name)
+        critic_2.save(critic_2_checkpoint_file_name)
 
     rewards_history.append(episodic_reward)
     last_mean = np.mean(rewards_history[-100:])
@@ -246,6 +251,6 @@ for i in range(num_episodes):
     if last_mean > 200:
         break
 if last_mean > 200:
-    actor.save('lunar_lander_td3.h5')
+    actor.save('lunar_lander_sac.h5')
 env.close()
 input("training complete...")
