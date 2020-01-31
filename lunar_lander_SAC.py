@@ -95,11 +95,11 @@ def get_actions(mu, log_sigma, noise=None):
 
 @tf.function
 def get_log_probs(mu, sigma, actions):
-    action_distributions = tfp.distributions.Normal(mu,sigma)
+    action_distributions = tfp.distributions.MultivariateNormalDiag(loc=mu, scale_diag=sigma)
     z = gaus_distr.sample()
     # appendix C of the SAC paper discribe applyed boundings which is log(1-tanh(u)^2)
-    log_probs = tf.reduce_mean(action_distributions.log_prob(mu + sigma*z) - \
-                tf.math.log(1 - tf.math.pow(actions, 2) + action_bounds_epsilon), axis=1)
+    log_probs = action_distributions.log_prob(mu + sigma*z) - \
+                tf.reduce_mean(tf.math.log(1 - tf.math.pow(actions, 2) + action_bounds_epsilon), axis=1)
     return log_probs
 
 @tf.function
