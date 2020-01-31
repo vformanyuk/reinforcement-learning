@@ -14,5 +14,6 @@ It is representative and doesn't skip frames like some other envs.
 * [Proximal Policy Optimization(PPO) + Generalized Advantage Estimator(GAE)](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_PPO.py)
 * [Deep Deterministic Policy Gradient (DDPG)](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_DDPG.py)
 * [Twin Delayed Deep Deterministic policy gradient (TD3)](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_TD3.py)
+* [Soft Actor-Critic (SAC)](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_SAC.py)
 
 Credits for SumTree implementation goes to [RL Code](https://github.com/rlcode)
