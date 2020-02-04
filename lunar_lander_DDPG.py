@@ -19,7 +19,6 @@ actor_learning_rate = 1e-4
 critic_learning_rate = 1e-3
 gamma = 0.99
 tau = 0.001
-#entropy_beta = 0.01
 
 RND_SEED = 0x12345
 

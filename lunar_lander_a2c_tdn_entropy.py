@@ -32,15 +32,17 @@ outputs_count = env.action_space.n
 actor_checkpoint_file_name = 'll_a2c_nrH_checkpoint.h5'
 critic_checkpoint_file_name = 'll_a2c_nrH_checkpoint.h5'
 
-tf.random.set_seed(0x12345)
-np.random.random(0)
+RND_SEED = 0x12345
+tf.random.set_seed(RND_SEED)
+np.random.random(RND_SEED)
+
 rewards_history = []
 
 actor_optimizer = tf.keras.optimizers.Adam(actor_learning_rate)
 critic_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
 
 def policy_network():
-    input = keras.layers.Input(shape=(None, X_shape))
+    input = keras.layers.Input(shape=(X_shape))
     x = keras.layers.Dense(512, activation='relu')(input)
     x = keras.layers.Dense(128, activation='relu')(x)
     actions_layer = keras.layers.Dense(outputs_count, activation='linear')(x)
@@ -49,7 +51,7 @@ def policy_network():
     return model
 
 def value_network():
-    input = keras.layers.Input(shape=(None, X_shape))
+    input = keras.layers.Input(shape=(X_shape))
     x = keras.layers.Dense(512, activation='relu')(input)
     x = keras.layers.Dense(128, activation='relu', kernel_regularizer=keras.regularizers.l2(0.001))(x)
     v_layer = keras.layers.Dense(1, activation='linear')(x)
@@ -88,7 +90,7 @@ def train_actor(state, action, advantage):
 def get_TDN_error(next_state, rewards, tau, T):
     tdN_error = 0
     for j in tf.range(tau, min(tau + N, T)):
-        tdN_error += np.power(gamma, j - tau) * rewards[j]
+        tdN_error = rewards[j] + gamma * tdN_error
 
     if tau + N < T:
         next_state_value = critic(tf.expand_dims(next_state, axis =0), training=False)
@@ -156,5 +158,6 @@ for i in range(num_episodes):
     if last_mean > 200:
         break
 env.close()
-actor.save('lunar_lander_a2c_nrH.h5')
+if last_mean > 200:
+    actor.save('lunar_lander_a2c_nrH.h5')
 input("training complete...")

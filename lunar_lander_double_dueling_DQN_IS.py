@@ -40,6 +40,10 @@ exp_buffer_capacity = 100000
 
 outputs_count = env.action_space.n
 
+RND_SEED = 0x12345
+tf.random.set_seed(RND_SEED)
+np.random.random(RND_SEED)
+
 optimizer = tf.keras.optimizers.Adam(learning_rate)
 
 memory = SumTree(exp_buffer_capacity)
@@ -113,7 +117,6 @@ def get_priority(err):
 mainQ = q_network()
 targetQ = q_network()
 
-np.random.random(0)
 rewards_history = []
 
 for i in range(num_episodes):
@@ -161,9 +164,10 @@ for i in range(num_episodes):
     rewards_history.append(episodic_reward)
     last_mean = np.mean(rewards_history[-100:])
 
-    print('[epoch ',i,' (steps: ',epoch_steps,')] Avg loss: ',np.mean(episodic_loss) if len(episodic_loss) > 0 else 0, ' Total reward: ', episodic_reward, f'Epsilon: {epsilon:.4f} Mean(100)={last_mean:.4f}')
+    print(f'[epoch {i} ({epoch_steps})] Avg loss: {np.mean(episodic_loss):.4f} Epsilon: {epsilon:.4f} Total reward: {episodic_reward:.4f} Mean(100)={last_mean:.4f}')
     if last_mean > 200:
         break
-targetQ.save('lunar_dueling_ddqn_IS.h5')
+if last_mean > 200:
+    targetQ.save('lunar_dueling_ddqn_IS.h5')
 env.close()
 input("training complete...")

@@ -21,10 +21,14 @@ outputs_count = env.action_space.n
 
 checkpoint_file_name = 'll_pgrad_checkpoint.h5'
 
+RND_SEED = 0x12345
+tf.random.set_seed(RND_SEED)
+np.random.random(RND_SEED)
+
 optimizer = tf.keras.optimizers.Adam(learning_rate)
 
 def policy_network():
-    input = keras.layers.Input(shape=(None,X_shape))
+    input = keras.layers.Input(shape=(X_shape))
     x = keras.layers.Dense(256, activation='relu')(input)
     x = keras.layers.Dense(128, activation='relu')(x)
     x = keras.layers.Dense(64, activation='relu')(x)
@@ -67,7 +71,6 @@ else:
     policy = policy_network()
     print("New model created.")
 
-np.random.random(0)
 rewards_history = []
 
 for i in range(num_episodes):
@@ -107,5 +110,6 @@ for i in range(num_episodes):
     if last_mean > 200:
         break
 env.close()
-policy.save('lunar_policy_grad.h5')
+if last_mean > 200:
+    policy.save('lunar_policy_grad.h5')
 input("training complete...")

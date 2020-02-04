@@ -24,7 +24,10 @@ outputs_count = env.action_space.n
 actor_checkpoint_file_name = 'll_actor_checkpoint.h5'
 critic_checkpoint_file_name = 'll_critic_checkpoint.h5'
 
-np.random.random(0)
+RND_SEED = 0x12345
+tf.random.set_seed(RND_SEED)
+np.random.random(RND_SEED)
+
 rewards_history = []
 
 actor_optimizer = tf.keras.optimizers.Adam(actor_learning_rate)
@@ -32,7 +35,7 @@ critic_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
 mse_loss = tf.keras.losses.MeanSquaredError()
 
 def policy_network():
-    input = keras.layers.Input(shape=(None, X_shape))
+    input = keras.layers.Input(shape=(X_shape))
     x = keras.layers.Dense(512, activation='relu')(input)
     x = keras.layers.Dense(128, activation='relu')(x)
     actions_layer = keras.layers.Dense(outputs_count, activation='linear')(x)
@@ -41,7 +44,7 @@ def policy_network():
     return model
 
 def value_network():
-    input = keras.layers.Input(shape=(None, X_shape))
+    input = keras.layers.Input(shape=(X_shape))
     x = keras.layers.Dense(512, activation='relu')(input)
     x = keras.layers.Dense(128, activation='relu')(x)
     v_layer = keras.layers.Dense(1, activation='linear')(x)
@@ -141,6 +144,7 @@ for i in range(num_episodes):
     if last_mean > 200:
         break
 env.close()
-actor.save('lunar_lander_ac.h5')
+if last_mean > 200:
+    actor.save('lunar_lander_ac.h5')
 input("training complete...")
 

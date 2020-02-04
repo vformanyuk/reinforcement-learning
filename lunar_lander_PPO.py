@@ -42,7 +42,7 @@ tf.random.set_seed(RND_SEED)
 np.random.random(RND_SEED)
 
 def policy_network():
-    input = keras.layers.Input(shape=(None, X_shape))
+    input = keras.layers.Input(shape=(X_shape))
     x = keras.layers.Dense(256, activation='relu', kernel_initializer = keras.initializers.lecun_uniform(seed=RND_SEED))(input)
     x = keras.layers.Dense(128, activation='relu', kernel_initializer = keras.initializers.lecun_uniform(seed=RND_SEED))(x)
     x = keras.layers.Dense(64, activation='relu', kernel_initializer = keras.initializers.lecun_uniform(seed=RND_SEED))(x)
@@ -52,7 +52,7 @@ def policy_network():
     return model
 
 def value_network():
-    input = keras.layers.Input(shape=(None, X_shape))
+    input = keras.layers.Input(shape=(X_shape))
     x = keras.layers.Dense(512, activation='relu', kernel_initializer = keras.initializers.lecun_uniform(seed=RND_SEED))(input)
     x = keras.layers.Dense(128, activation='relu', 
                            kernel_initializer = keras.initializers.lecun_uniform(seed=RND_SEED),
@@ -199,5 +199,6 @@ for epoc in range(num_episodes):
     if last_mean > 200:
         break
 env.close()
-target_policy.save('lunar_ppo.h5')
+if last_mean > 200:
+    target_policy.save('lunar_ppo.h5')
 input("training complete...")
