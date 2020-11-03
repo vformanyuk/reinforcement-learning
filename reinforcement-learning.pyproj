@@ -4,7 +4,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>9e5b33f6-4bd8-4f6d-8f56-78c4ed632669</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>lunar_lander_a2c_tdn_entropy.py</StartupFile>
+    <StartupFile>lunar_lander_double_dueling_DQN_IS.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
@@ -32,6 +32,7 @@
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="lunar_lander_doubleDQN.py" />
+    <Compile Include="lunar_lander_double_dueling_DQN_IS_rank.py" />
     <Compile Include="lunar_lander_double_dueling_DQN.py" />
     <Compile Include="lunar_lander_double_dueling_DQN_IS.py" />
     <Compile Include="lunar_lander_keras.py" />
@@ -41,6 +42,9 @@
     </Compile>
     <Compile Include="lunar_lander_SAC.py" />
     <Compile Include="lunar_lander_TD3.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="opt_tst.py">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="per\cartpole_per.py" />
