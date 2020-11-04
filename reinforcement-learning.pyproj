@@ -4,7 +4,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>9e5b33f6-4bd8-4f6d-8f56-78c4ed632669</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>lunar_lander_a2c_tdn_entropy.py</StartupFile>
+    <StartupFile>lunar_lander_double_dueling_DQN_IS.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
@@ -43,19 +43,11 @@
     <Compile Include="lunar_lander_TD3.py">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="per\cartpole_per.py" />
-    <Compile Include="per\prioritized_memory.py" />
-    <Compile Include="per\SumTree.py" />
     <Compile Include="rl_utils.py">
       <SubType>Code</SubType>
     </Compile>
   </ItemGroup>
   <ItemGroup>
-    <Folder Include="per\" />
-  </ItemGroup>
-  <ItemGroup>
-    <Content Include="per\.git" />
-    <Content Include="per\README.md" />
     <Content Include="side_notes.txt" />
   </ItemGroup>
   <ItemGroup>

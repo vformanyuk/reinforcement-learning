@@ -1,13 +1,8 @@
-'''
-Prioritized expirience replay
-https://arxiv.org/abs/1511.05952
-'''
-
 import gym
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
-from per.SumTree import SumTree
+from rl_utils import SARST_TD_Priority_MemoryBuffer
 
 # prevent TensorFlow of allocating whole GPU memory
 gpus = tf.config.experimental.list_physical_devices('GPU')
@@ -15,28 +10,23 @@ tf.config.experimental.set_memory_growth(gpus[0], True)
 
 env = gym.make('LunarLander-v2')
 
-num_episodes = 800
+num_episodes = 1000
 global_step = 0
-copy_step = 100
 steps_train = 4
+copy_step = 100
 start_steps = 1200
 
 epsilon = 1
 epsilon_min = 0.01
 epsilon_decay_steps = 1.5e-4
 
-priority_eps = 0.00001
-priority_alpha = 0.6
-priority_beta = 0.4
-priority_beta_step = (1-priority_beta)/num_episodes
-piority_max_prob = 1
-
-learning_rate = 0.001
-batch_size = 64
+learning_rate = 3e-4
+batch_size = 128
 X_shape = (env.observation_space.shape[0])
-discount_factor = 0.99
+discount_factor = 0.98
 
-exp_buffer_capacity = 100000
+exp_buffer_capacity = 524288 #2**19
+exp_buffer = SARST_TD_Priority_MemoryBuffer(exp_buffer_capacity, env.observation_space.shape, env.action_space.shape, action_type=np.int32)
 
 outputs_count = env.action_space.n
 
@@ -45,8 +35,6 @@ tf.random.set_seed(RND_SEED)
 np.random.random(RND_SEED)
 
 optimizer = tf.keras.optimizers.Adam(learning_rate)
-
-memory = SumTree(exp_buffer_capacity)
 
 def q_network():
     input = keras.layers.Input(shape=X_shape, batch_size=batch_size)
@@ -58,61 +46,43 @@ def q_network():
     model = keras.Model(inputs=input, outputs=[advs, vals])
     return model
 
-def epsilon_greedy(step, observation):
+def epsilon_greedy(observation):
     if np.random.rand() < epsilon:
         return np.random.randint(env.action_space.n)
     else:
         advantages, _ = mainQ.predict(np.expand_dims(observation, axis = 0))
         return np.argmax(advantages)
 
-def priority_sample(batch_size):
-    batch = []
-    idxs = []
-    segment = memory.total() / batch_size
-    priorities = []
-
-    beta = np.min([1., priority_beta + priority_beta_step])
-
-    for i in range(batch_size):
-        a = segment * i
-        b = segment * (i + 1)
-
-        s = np.random.uniform(a, b)
-        (idx, p, data) = memory.get(s)
-        priorities.append(p)
-        batch.append(data)
-        idxs.append(idx)
-
-    sampling_probabilities = priorities / memory.total()
-    is_weight = np.power(memory.n_entries * sampling_probabilities, -beta)
-    is_weight /= is_weight.max()
-    return np.array(batch), idxs, is_weight
+def sample_expirience(batch_size):
+    perm_batch = np.random.permutation(len(exp_buffer))[:batch_size]
+    return np.array(exp_buffer)[perm_batch]
 
 @tf.function
-def learn(source_states, actions, destination_states, rewards, dones, importance_weights):
+def learn(source_states, actions, destination_states, rewards, dones, isw):
     one_hot_actions_mask = tf.one_hot(actions, depth=outputs_count, on_value = 1.0, off_value = 0.0, dtype=tf.float32) #shape batch_size,4
 
-    target_advs, target_values = targetQ(destination_states, training=False) # shape = (batch_size,4)
+    target_advs, target_values = targetQ(destination_states, training=False)
     target_q = tf.add(target_values, (target_advs - tf.reduce_mean(target_advs, axis=1, keepdims = True))) #Q(s,a) = V(s) + (A(s,a) - mean(A(s,a'))
     target_y = rewards + discount_factor * tf.reduce_max(target_q, axis=1) * (1 - dones) # shape = (batch_size,)
     
     with tf.GradientTape() as tape:
-        pred_advs, pred_values = mainQ(source_states, training=True) # shape = (batch_size,4)
+        pred_advs, pred_values = mainQ(source_states, training=True)
+        
         pred_q = tf.add(pred_values, (pred_advs - tf.reduce_mean(pred_advs, axis=1, keepdims = True))) #Q(s,a) = V(s) + (A(s,a) - mean(A(s,a'))
         pred_y = tf.reduce_sum(tf.math.multiply(pred_q, one_hot_actions_mask), axis=1) # Q values for non-chosen action do not impact loss. shape = (batch_size,)
         
-        td_error = tf.math.subtract(target_y, pred_y)
-        loss = tf.reduce_mean(tf.math.multiply(tf.math.square(td_error), importance_weights))
-    gradients = tape.gradient(loss, mainQ.trainable_variables)
-    optimizer.apply_gradients(zip(gradients, mainQ.trainable_variables))
-    return loss, tf.math.abs(td_error)
+        with tape.stop_recording():
+            td_errors = target_y - pred_y
+
+        #loss = mse_loss(target_y,pred_y)
+        loss = tf.reduce_sum(isw * tf.math.pow(target_y - pred_y, 2), axis=0)
+    gradients = tape.gradient(loss, mainQ.trainable_weights)
+    optimizer.apply_gradients(zip(gradients, mainQ.trainable_weights))
+    return loss, td_errors
 
 def epsilon_decay():
     global epsilon
     epsilon = epsilon - epsilon_decay_steps if epsilon > epsilon_min else epsilon_min
-
-def get_priority(err):
-    return np.power(err + priority_eps, priority_alpha)
 
 mainQ = q_network()
 targetQ = q_network()
@@ -127,31 +97,16 @@ for i in range(num_episodes):
     episodic_loss = []
     while not done:
         #env.render()
-        chosen_action = epsilon_greedy(global_step, obs)
+        chosen_action = epsilon_greedy(obs)
         next_obs, reward, done, _ = env.step(chosen_action)
-        memory.add(get_priority(piority_max_prob), [tf.convert_to_tensor(obs, dtype=tf.float32),
-                           chosen_action,
-                           tf.convert_to_tensor(next_obs, dtype=tf.float32),
-                           reward,
-                           float(done)])
+        exp_buffer.store(obs, chosen_action, next_obs, reward, float(done))
         
-        if global_step > start_steps and global_step % steps_train == 0:
-            samples, sample_idxs, is_weights = priority_sample(batch_size)
-            states_tensor = tf.stack(samples[:,0])
-            actions_tensor = tf.convert_to_tensor(samples[:,1], dtype=tf.uint8)
-            next_states_tensor = tf.stack(samples[:,2])
-            rewards_tensor = tf.convert_to_tensor(samples[:,3], dtype=tf.float32)
-            dones_tensor = tf.convert_to_tensor(samples[:,4], dtype=tf.float32)
-            is_weights_tensor = tf.convert_to_tensor(is_weights, dtype=tf.float32)
-
-            loss, td_errors = learn(states_tensor,actions_tensor,next_states_tensor,rewards_tensor,dones_tensor,is_weights_tensor)
+        if global_step > 2 * batch_size:
+            states, actions, next_states, rewards, dones, is_weights, idxs = exp_buffer(batch_size)
+            loss, td_errors = learn(states, actions, next_states, rewards, dones, is_weights)
+            exp_buffer.update_priorities(idxs,td_errors)
             episodic_loss.append(loss)
             epsilon_decay()
-
-            #update priorities
-            for batch_idx, err in enumerate(td_errors):
-                memory.update(sample_idxs[batch_idx], get_priority(err))
-            piority_max_prob = max(td_errors)
 
         if (global_step + 1) % copy_step == 0 and global_step > start_steps:
             targetQ.set_weights(mainQ.get_weights())
@@ -160,14 +115,12 @@ for i in range(num_episodes):
         epoch_steps+=1
         episodic_reward += reward
 
-    priority_beta += priority_beta_step
     rewards_history.append(episodic_reward)
     last_mean = np.mean(rewards_history[-100:])
-
-    print(f'[epoch {i} ({epoch_steps})] Avg loss: {np.mean(episodic_loss):.4f} Epsilon: {epsilon:.4f} Total reward: {episodic_reward:.4f} Mean(100)={last_mean:.4f}')
+    print(f'[epoch {i} ({epoch_steps})] Avg loss: {np.mean(episodic_loss):.4f} Epsilon: {epsilon:.4f} B: {exp_buffer.beta:.4f} Total reward: {episodic_reward:.4f} Mean(100)={last_mean:.4f}')
     if last_mean > 200:
         break
 if last_mean > 200:
-    targetQ.save('lunar_dueling_ddqn_IS.h5')
+    targetQ.save('lunar_dueling_ddqn_is2.h5')
 env.close()
 input("training complete...")
