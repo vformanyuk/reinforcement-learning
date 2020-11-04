@@ -44,22 +44,11 @@
     <Compile Include="lunar_lander_TD3.py">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="opt_tst.py">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="per\cartpole_per.py" />
-    <Compile Include="per\prioritized_memory.py" />
-    <Compile Include="per\SumTree.py" />
     <Compile Include="rl_utils.py">
       <SubType>Code</SubType>
     </Compile>
   </ItemGroup>
   <ItemGroup>
-    <Folder Include="per\" />
-  </ItemGroup>
-  <ItemGroup>
-    <Content Include="per\.git" />
-    <Content Include="per\README.md" />
     <Content Include="side_notes.txt" />
   </ItemGroup>
   <ItemGroup>
