@@ -32,7 +32,6 @@
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="lunar_lander_doubleDQN.py" />
-    <Compile Include="lunar_lander_double_dueling_DQN_IS_rank.py" />
     <Compile Include="lunar_lander_double_dueling_DQN.py" />
     <Compile Include="lunar_lander_double_dueling_DQN_IS.py" />
     <Compile Include="lunar_lander_keras.py" />

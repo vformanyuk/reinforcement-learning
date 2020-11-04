@@ -2,7 +2,6 @@ import gym
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
-from collections import deque
 from rl_utils import SARST_TD_Priority_MemoryBuffer
 
 # prevent TensorFlow of allocating whole GPU memory
@@ -36,7 +35,6 @@ tf.random.set_seed(RND_SEED)
 np.random.random(RND_SEED)
 
 optimizer = tf.keras.optimizers.Adam(learning_rate)
-mse_loss = tf.keras.losses.MeanSquaredError()
 
 def q_network():
     input = keras.layers.Input(shape=X_shape, batch_size=batch_size)
