@@ -2,7 +2,7 @@ import gym
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
-from rl_utils import SARST_TD_Priority_MemoryBuffer
+from rl_utils.SARST_TD_Priority_MemoryBuffer import SARST_TD_Priority_MemoryBuffer
 
 # prevent TensorFlow of allocating whole GPU memory
 gpus = tf.config.experimental.list_physical_devices('GPU')

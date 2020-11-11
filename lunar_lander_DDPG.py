@@ -3,7 +3,8 @@ import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 import os
-from rl_utils import OUActionNoise, SARST_RandomAccess_MemoryBuffer
+from rl_utils.SARST_RandomAccess_MemoryBuffer import SARST_RandomAccess_MemoryBuffer
+from rl_utils.OUActionNoise import OUActionNoise
 
 # prevent TensorFlow of allocating whole GPU memory
 gpus = tf.config.experimental.list_physical_devices('GPU')
