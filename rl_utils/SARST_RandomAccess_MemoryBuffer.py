@@ -2,10 +2,10 @@ import numpy as np
 import tensorflow as tf
 
 class SARST_RandomAccess_MemoryBuffer(object):
-    def __init__(self, buffer_size, state_shape, action_shape):
+    def __init__(self, buffer_size, state_shape, action_shape, action_type = np.float32):
         self.states_memory = np.empty(shape=(buffer_size, *state_shape), dtype = np.float32)
         self.next_states_memory = np.empty(shape=(buffer_size, *state_shape), dtype = np.float32)
-        self.actions_memory = np.empty(shape=(buffer_size, *action_shape), dtype = np.float32)
+        self.actions_memory = np.empty(shape=(buffer_size, *action_shape), dtype = action_type)
         self.rewards_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
         self.dones_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
         self.buffer_size = buffer_size
