@@ -2,7 +2,7 @@ import gym
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
-from collections import deque
+from rl_utils.SARST_RandomAccess_MemoryBuffer import SARST_RandomAccess_MemoryBuffer
 
 # prevent TensorFlow of allocating whole GPU memory
 gpus = tf.config.experimental.list_physical_devices('GPU')
@@ -20,10 +20,10 @@ epsilon = 1
 epsilon_min = 0.01
 epsilon_decay_steps = 1.5e-4
 
-learning_rate = 0.001
-batch_size = 64
+learning_rate = 3e-4
+batch_size = 128
 X_shape = (env.observation_space.shape[0])
-discount_factor = 0.99
+discount_factor = 0.98
 
 exp_buffer_capacity = 100000
 
@@ -53,10 +53,6 @@ def epsilon_greedy(observation):
         advantages, _ = mainQ.predict(np.expand_dims(observation, axis = 0))
         return np.argmax(advantages)
 
-def sample_expirience(batch_size):
-    perm_batch = np.random.permutation(len(exp_buffer))[:batch_size]
-    return np.array(exp_buffer)[perm_batch]
-
 @tf.function
 def learn(source_states, actions, destination_states, rewards, dones):
     one_hot_actions_mask = tf.one_hot(actions, depth=outputs_count, on_value = 1.0, off_value = 0.0, dtype=tf.float32) #shape batch_size,4
@@ -81,7 +77,7 @@ def epsilon_decay():
     global epsilon
     epsilon = epsilon - epsilon_decay_steps if epsilon > epsilon_min else epsilon_min
 
-exp_buffer = deque(maxlen=exp_buffer_capacity)
+exp_buffer = SARST_RandomAccess_MemoryBuffer(exp_buffer_capacity, env.observation_space.shape, env.action_space.shape, action_type=np.int32)
 
 mainQ = q_network()
 targetQ = q_network()
@@ -98,19 +94,10 @@ for i in range(num_episodes):
         #env.render()
         chosen_action = epsilon_greedy(obs)
         next_obs, reward, done, _ = env.step(chosen_action)
-        exp_buffer.append([tf.convert_to_tensor(obs, dtype=tf.float32),
-                           chosen_action,
-                           tf.convert_to_tensor(next_obs, dtype=tf.float32),
-                           reward,
-                           float(done)])
+        exp_buffer.store(obs, chosen_action, next_obs, reward, float(done))
         
         if global_step > start_steps and global_step % steps_train == 0:
-            samples = sample_expirience(batch_size)
-            states_tensor = tf.stack(samples[:,0])
-            actions_tensor = tf.convert_to_tensor(samples[:,1], dtype=tf.uint8)
-            next_states_tensor = tf.stack(samples[:,2])
-            rewards_tensor = tf.convert_to_tensor(samples[:,3], dtype=tf.float32)
-            dones_tensor = tf.convert_to_tensor(samples[:,4], dtype=tf.float32)
+            states_tensor, actions_tensor, next_states_tensor, rewards_tensor, dones_tensor = exp_buffer(batch_size)
 
             loss = learn(states_tensor,actions_tensor,next_states_tensor,rewards_tensor,dones_tensor)
             episodic_loss.append(loss)

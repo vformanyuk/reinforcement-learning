@@ -1,65 +1,22 @@
 import numpy as np
 import tensorflow as tf
 
-class OUActionNoise(object):
-    def __init__(self, mu, sigma=0.15, theta=.2, dt=1e-2, x0=None):
-        self.theta = theta
-        self.mu = mu
-        self.sigma = sigma
-        self.dt = dt
-        self.x0 = x0
-        self.reset()
-
-    def __call__(self):
-        x = self.x_prev + self.theta * (self.mu - self.x_prev) * self.dt + \
-            self.sigma * np.sqrt(self.dt) * np.random.normal(size=self.mu.shape)
-        self.x_prev = x
-        return x
-
-    def reset(self):
-        self.x_prev = self.x0 if self.x0 is not None else np.zeros_like(self.mu)
-
-class SARST_RandomAccess_MemoryBuffer(object):
-    def __init__(self, buffer_size, state_shape, action_shape):
-        self.states_memory = np.empty(shape=(buffer_size, *state_shape), dtype = np.float32)
-        self.next_states_memory = np.empty(shape=(buffer_size, *state_shape), dtype = np.float32)
-        self.actions_memory = np.empty(shape=(buffer_size, *action_shape), dtype = np.float32)
-        self.rewards_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
-        self.dones_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
-        self.buffer_size = buffer_size
-        self.memory_idx = 0
-
-    def store(self, state:tf.Tensor, action:tf.Tensor, next_state:tf.Tensor, reward:tf.Tensor, is_terminal:tf.Tensor):
-        write_idx = self.memory_idx % self.buffer_size
-        self.states_memory[write_idx] = state
-        self.next_states_memory[write_idx] = next_state
-        self.actions_memory[write_idx] = action
-        self.rewards_memory[write_idx] = reward
-        self.dones_memory[write_idx] = is_terminal
-        self.memory_idx += 1
-
-    def __call__(self, batch_size):
-        upper_bound = self.memory_idx if self.memory_idx < self.buffer_size else self.buffer_size
-        idxs = np.random.permutation(upper_bound)[:batch_size]
-        return tf.stack(self.states_memory[idxs]), \
-            tf.stack(self.actions_memory[idxs]), \
-            tf.stack(self.next_states_memory[idxs]), \
-            tf.stack(self.rewards_memory[idxs]), \
-            tf.stack(self.dones_memory[idxs])
-
 class SARST_TD_Priority_MemoryBuffer(object):
-    def __init__(self, buffer_size, state_shape, action_shape, action_type = np.float32, alpha=0.6, beta=0.4, beta_increase_rate=1.0001):
+    def __init__(self, buffer_size, state_shape, action_shape, action_type = np.float32, alpha=0.6, beta=0.4, beta_increase_rate=1.0001, greedy_sampling = False):
         self.states_memory = np.empty(shape=(buffer_size, *state_shape), dtype = np.float32)
         self.next_states_memory = np.empty(shape=(buffer_size, *state_shape), dtype = np.float32)
         self.actions_memory = np.empty(shape=(buffer_size, *action_shape), dtype = action_type)
         self.rewards_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
         self.dones_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
-        self.buffer_size = buffer_size
+        self.buffer_size = buffer_size #must be a power of 2
         self.memory_idx = 0
         self.epsilon = 1e-6
         self.alpha = alpha
         self.beta = beta
         self.beta_inc_rate = beta_increase_rate
+        self.__sampling_method = self.__stohastic_sample
+        if greedy_sampling:
+            self.__sampling_method = self.__greedy_sample
         self.tree_capacity = buffer_size
         self._sum_tree = [0]*(self.tree_capacity * 2 - 1)
         for i in range(self.tree_capacity):
@@ -121,12 +78,15 @@ class SARST_TD_Priority_MemoryBuffer(object):
                 lvl_idx = search_idx % lvl_base_idx
             lvl+=1
         return self._sum_tree[search_idx]
-
-    def __call__(self, batch_size):
+    def __greedy_sample(self, batch_size):
+        return np.random.uniform(low=self.epsilon, high=self._total, size=batch_size)
+    def __stohastic_sample(self, batch_size):
         segment_len = self._total / batch_size
+        return list([segment_len * (j + r) for j,r in enumerate(np.random.uniform(low=0, high=1, size=batch_size))])
+    def __call__(self, batch_size):
+        random_priorities = self.__sampling_method(batch_size)
         idxs = list()
         importance_sampling_weights = list()
-        random_priorities = [segment_len * (j + r) for j,r in enumerate(np.random.uniform(low=0, high=1, size=batch_size))]
 
         for p in random_priorities:
             data_item = self._get(p)

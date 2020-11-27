@@ -4,7 +4,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>9e5b33f6-4bd8-4f6d-8f56-78c4ed632669</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>lunar_lander_double_dueling_DQN_IS.py</StartupFile>
+    <StartupFile>lunar_lander_double_dueling_DQN_IS_rank.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
@@ -33,6 +33,7 @@
     </Compile>
     <Compile Include="lunar_lander_doubleDQN.py" />
     <Compile Include="lunar_lander_double_dueling_DQN.py" />
+    <Compile Include="lunar_lander_double_dueling_DQN_IS_rank.py" />
     <Compile Include="lunar_lander_double_dueling_DQN_IS.py" />
     <Compile Include="lunar_lander_keras.py" />
     <Compile Include="lunar_lander_PPO.py" />
@@ -43,7 +44,16 @@
     <Compile Include="lunar_lander_TD3.py">
       <SubType>Code</SubType>
     </Compile>
-    <Compile Include="rl_utils.py">
+    <Compile Include="rl_utils\OUActionNoise.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="rl_utils\SARST_RandomAccess_MemoryBuffer.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="rl_utils\SARST_Rank_Priority_MemoryBuffer.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="rl_utils\SARST_TD_Priority_MemoryBuffer.py">
       <SubType>Code</SubType>
     </Compile>
   </ItemGroup>
@@ -52,6 +62,9 @@
   </ItemGroup>
   <ItemGroup>
     <InterpreterReference Include="Global|ContinuumAnalytics|Anaconda37-64" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="rl_utils\" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in

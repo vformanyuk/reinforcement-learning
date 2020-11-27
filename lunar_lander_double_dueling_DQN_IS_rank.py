@@ -2,7 +2,7 @@ import gym
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
-from rl_utils.SARST_TD_Priority_MemoryBuffer import SARST_TD_Priority_MemoryBuffer
+from rl_utils.SARST_Rank_Priority_MemoryBuffer import SARST_Rank_Priority_MemoryBuffer
 
 # prevent TensorFlow of allocating whole GPU memory
 gpus = tf.config.experimental.list_physical_devices('GPU')
@@ -25,8 +25,8 @@ batch_size = 128
 X_shape = (env.observation_space.shape[0])
 discount_factor = 0.98
 
-exp_buffer_capacity = 524288 #2**19
-exp_buffer = SARST_TD_Priority_MemoryBuffer(exp_buffer_capacity, env.observation_space.shape, env.action_space.shape, action_type=np.int32)
+exp_buffer_capacity = 1000000
+exp_buffer = SARST_Rank_Priority_MemoryBuffer(exp_buffer_capacity, batch_size, env.observation_space.shape, env.action_space.shape, action_type=np.int32)
 
 outputs_count = env.action_space.n
 
@@ -102,9 +102,9 @@ for i in range(num_episodes):
         exp_buffer.store(obs, chosen_action, next_obs, reward, float(done))
         
         if global_step > 2 * batch_size:
-            states, actions, next_states, rewards, dones, is_weights, idxs = exp_buffer(batch_size)
+            states, actions, next_states, rewards, dones, is_weights, meta_idxs = exp_buffer()
             loss, td_errors = learn(states, actions, next_states, rewards, dones, is_weights)
-            exp_buffer.update_priorities(idxs,td_errors)
+            exp_buffer.update_priorities(meta_idxs,td_errors)
             episodic_loss.append(loss)
             epsilon_decay()
 
@@ -121,6 +121,6 @@ for i in range(num_episodes):
     if last_mean > 200:
         break
 if last_mean > 200:
-    targetQ.save('lunar_dueling_ddqn_is2.h5')
+    targetQ.save('lunar_dueling_ddqn_is2_rank.h5')
 env.close()
 input("training complete...")
