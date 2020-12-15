@@ -4,7 +4,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>9e5b33f6-4bd8-4f6d-8f56-78c4ed632669</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>lunar_lander_double_dueling_DQN_IS_rank.py</StartupFile>
+    <StartupFile>lunar_lander_apex_dpg.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
@@ -22,10 +22,26 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="APEX\dpg_actor.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="APEX\dpg_learner.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="APEX\APEX_Local_MemoryBuffer.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="APEX\neural_networks.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="APEX\APEX_Rank_Priority_MemoryBuffer.py" />
     <Compile Include="lunar_lander_a2c_tdn_entropy.py">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="lunar_lander_ActorCritic.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="lunar_lander_apex_dpg.py">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="lunar_lander_DDPG.py">
@@ -64,6 +80,7 @@
     <InterpreterReference Include="Global|ContinuumAnalytics|Anaconda37-64" />
   </ItemGroup>
   <ItemGroup>
+    <Folder Include="APEX\" />
     <Folder Include="rl_utils\" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
