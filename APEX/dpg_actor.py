@@ -4,7 +4,7 @@ import tensorflow as tf
 import multiprocessing as mp
 
 from APEX.neural_networks import policy_network, critic_network
-from APEX.APEX_Local_MemoryBuffer import APEX_Local_MemoryBuffer
+from APEX.APEX_Local_MemoryBuffer import APEX_NStep_Local_MemoryBuffer
 
 class Actor(object):
     def __init__(self, id:int, batch_size:int, gamma:float, actor_leraning_rate:float, critic_learning_rate:float,
@@ -53,9 +53,9 @@ class Actor(object):
             print("[send_replay_data] Connection closed.")
 
     @tf.function
-    def train_actor_critic(self, states, actions, next_states, rewards, dones):
+    def train_actor_critic(self, states, actions, next_states, rewards, gammas, dones):
         target_mu = self.target_actor(next_states, training=False)
-        target_q = rewards + self.gamma * tf.reduce_max((1 - dones) * self.target_critic([next_states, target_mu], training=False), axis = 1)
+        target_q = rewards + gammas * tf.reduce_max((1 - dones) * self.target_critic([next_states, target_mu], training=False), axis = 1)
 
         with tf.GradientTape() as tape:
             current_q = tf.squeeze(self.critic([states, actions], training=True), axis=1)
@@ -87,9 +87,7 @@ class Actor(object):
         self.target_critic = critic_network((env.observation_space.shape[0]), env.action_space.shape[0])
         self.target_critic.set_weights(self.critic.get_weights())
 
-        # Buffer length must be N == N-step return length and so - N << batch_size
-        # Becasue N-step return is used - buffer not cleared after sampling.
-        exp_buffer = APEX_Local_MemoryBuffer(self.batch_size, env.observation_space.shape, env.action_space.shape)
+        exp_buffer = APEX_NStep_Local_MemoryBuffer(self.batch_size, 3, self.gamma, env.observation_space.shape, env.action_space.shape)
         rewards_history = []
         global_step = 0
         training_batches_counter = 0
@@ -111,9 +109,8 @@ class Actor(object):
                 exp_buffer.store(observation, chosen_action, next_observation, reward, float(done))
 
                 if global_step % self.batch_size == 0 and global_step > 0:
-                    # writer position is reset after every fetching from local buffer
-                    replay_states, replay_actions, replay_next_states, replay_rewards, replay_dones = exp_buffer()
-                    actor_loss, critic_loss, td_errors = self.train_actor_critic(replay_states, replay_actions, replay_next_states, replay_rewards, replay_dones) 
+                    replay_states, replay_actions, replay_next_states, replay_rewards, replay_gammas, replay_dones = exp_buffer()
+                    actor_loss, critic_loss, td_errors = self.train_actor_critic(replay_states, replay_actions, replay_next_states, replay_rewards, replay_gammas, replay_dones) 
                     actor_loss_history.append(actor_loss)
                     critic_loss_history.append(critic_loss)
                     self.send_replay_data(replay_states, replay_actions, replay_next_states, replay_rewards, replay_dones, td_errors)
