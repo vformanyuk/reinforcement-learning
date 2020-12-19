@@ -4,7 +4,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>9e5b33f6-4bd8-4f6d-8f56-78c4ed632669</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>lunar_lander_double_dueling_DQN_IS_rank.py</StartupFile>
+    <StartupFile>lunar_lander_a2c_tdn_entropy_2.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
@@ -23,6 +23,9 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="lunar_lander_a2c_tdn_entropy.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="lunar_lander_a2c_tdn_entropy_2.py">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="lunar_lander_ActorCritic.py">
@@ -45,6 +48,9 @@
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="rl_utils\OUActionNoise.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="rl_utils\SARST_NStepReturn_RandomAccess_MemoryBuffer.py">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="rl_utils\SARST_RandomAccess_MemoryBuffer.py">
