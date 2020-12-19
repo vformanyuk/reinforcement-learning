@@ -75,7 +75,7 @@ def learn(source_states, actions, destination_states, rewards, dones, isw):
             td_errors = target_y - pred_y
 
         #loss = mse_loss(target_y,pred_y)
-        loss = tf.reduce_sum(isw * tf.math.pow(target_y - pred_y, 2) / batch_size, axis=0)
+        loss = tf.reduce_mean(isw * tf.math.pow(target_y - pred_y, 2), axis=0)
     gradients = tape.gradient(loss, mainQ.trainable_weights)
     optimizer.apply_gradients(zip(gradients, mainQ.trainable_weights))
     return loss, td_errors
