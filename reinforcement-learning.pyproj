@@ -4,7 +4,8 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>9e5b33f6-4bd8-4f6d-8f56-78c4ed632669</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>lunar_lander_a2c_tdn_entropy_2.py</StartupFile>
+    <StartupFile>
+    </StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
@@ -22,10 +23,8 @@
     <EnableUnmanagedDebugging>false</EnableUnmanagedDebugging>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="lunar_lander_a2c_tdn_buffer_with_entropy.py" />
     <Compile Include="lunar_lander_a2c_tdn_entropy.py">
-      <SubType>Code</SubType>
-    </Compile>
-    <Compile Include="lunar_lander_a2c_tdn_entropy_2.py">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="lunar_lander_ActorCritic.py">
