@@ -12,6 +12,7 @@ It is representative and doesn't skip frames like some other envs.
 * [Vanila Policy Gradient](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_PolicyGradient.py)
 * [Advantage Actor-Critic with MC update](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_ActorCritic.py)
 * [Advantage Actro-Critic with online update, N-returns backup and entropy bonus](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_a2c_tdn_entropy.py)
+* [Advantage Actro-Critic with online update, N-returns backup implemented in replay buffer and entropy bonus](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_a2c_tdn_buffer_with_entropy.py)
 * [Proximal Policy Optimization(PPO) + Generalized Advantage Estimator(GAE)](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_PPO.py)
 * [Deep Deterministic Policy Gradient (DDPG)](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_DDPG.py)
 * [Twin Delayed Deep Deterministic policy gradient (TD3)](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_TD3.py)
