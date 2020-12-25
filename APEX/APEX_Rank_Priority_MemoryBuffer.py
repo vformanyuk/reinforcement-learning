@@ -19,6 +19,7 @@ class APEX_Rank_Priority_MemoryBuffer(object):
         self.next_states_memory = np.empty(shape=(buffer_size, *state_shape), dtype = np.float32)
         self.actions_memory = np.empty(shape=(buffer_size, *action_shape), dtype = action_type)
         self.rewards_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
+        self.gamma_powers_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
         self.dones_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
         self.buffer_size = buffer_size
         self.batch_size = batch_size
@@ -79,12 +80,13 @@ class APEX_Rank_Priority_MemoryBuffer(object):
     def __get_sampling_interval_boundary(self, interval_idx, interval_len):
         return np.exp(np.log((interval_len*interval_idx - self.gamma_s)*(1-self.alpha) + 1) / (1-self.alpha))
 
-    def store(self, state:tf.Tensor, action:tf.Tensor, next_state:tf.Tensor, reward:tf.Tensor, is_terminal:tf.Tensor, td_error:tf.Tensor):
+    def store(self, state:tf.Tensor, action:tf.Tensor, next_state:tf.Tensor, reward:tf.Tensor, gamma_power:tf.Tensor, is_terminal:tf.Tensor, td_error:tf.Tensor):
         write_idx = self.memory_idx % self.buffer_size
         self.states_memory[write_idx] = state
         self.next_states_memory[write_idx] = next_state
         self.actions_memory[write_idx] = action
         self.rewards_memory[write_idx] = reward
+        self.gamma_powers_memory[write_idx] = gamma_power
         self.dones_memory[write_idx] = is_terminal
         if self.memory_idx >= self.buffer_size:
             self.ordered_storage.remove(self.lookup[write_idx]) # O(n)
@@ -97,6 +99,9 @@ class APEX_Rank_Priority_MemoryBuffer(object):
         for idx, err in zip(meta_idxs, np.abs(td_errors)):
             container_to_remove = self.ordered_storage.pop(idx)
             bs.insort_right(self.ordered_storage, rank_container(container_to_remove.replay_buffer_idx, err)) # O(n)
+
+    def __len__(self):
+        return self.memory_idx
 
     def __call__(self):
         idxs = list()
@@ -129,6 +134,7 @@ class APEX_Rank_Priority_MemoryBuffer(object):
             tf.stack(self.actions_memory[idxs]), \
             tf.stack(self.next_states_memory[idxs]), \
             tf.stack(self.rewards_memory[idxs]), \
+            tf.stack(self.gamma_powers_memory[idxs]), \
             tf.stack(self.dones_memory[idxs]), \
             tf.convert_to_tensor(importance_sampling_weights / self.max_is_weight, dtype=tf.float32), \
             meta_idxs

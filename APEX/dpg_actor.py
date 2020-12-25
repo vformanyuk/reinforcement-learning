@@ -4,11 +4,11 @@ import tensorflow as tf
 import multiprocessing as mp
 
 from APEX.neural_networks import policy_network, critic_network
-from APEX.APEX_Local_MemoryBuffer import APEX_NStep_Local_MemoryBuffer
+from APEX.APEX_Local_MemoryBuffer import APEX_NStepReturn_RandomAccess_MemoryBuffer
 
 class Actor(object):
     def __init__(self, id:int, batch_size:int, gamma:float, actor_leraning_rate:float, critic_learning_rate:float,
-                 cmd_pipe:mp.Pipe, weights_pipe:mp.Pipe, replay_pipe:mp.Pipe, cancelation_token:mp.Value,
+                 cmd_pipe:mp.Pipe, weights_pipe:mp.Pipe, replay_pipe:mp.Pipe, cancelation_token:mp.Value, training_active_flag:mp.Value,
                  *args, **kwargs):
         self.debug_mode = False
         self.id = id
@@ -16,11 +16,14 @@ class Actor(object):
         self.weights_pipe = weights_pipe
         self.replay_pipe = replay_pipe
         self.cancelation_token = cancelation_token
-        self.exchange_steps = 100
+        self.training_active = training_active_flag
+        self.exchange_steps = 100 + np.random.randint(low=10, high=90, size=1)[0]
+        self.data_send_steps = 50
         self.actor_optimizer = tf.keras.optimizers.Adam(actor_leraning_rate)
         self.critic_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
         self.gamma = gamma
         self.batch_size = batch_size
+        self.N = 3
 
     def log(self, msg):
         if self.debug_mode:
@@ -38,10 +41,10 @@ class Actor(object):
         except OSError:
             print("[get_target_weights] Connection closed.")
 
-    def send_replay_data(self, states, actions, next_states, rewards, dones, td_errors):
+    def send_replay_data(self, states, actions, next_states, rewards, gamma_powers, dones, td_errors):
         buffer = []
         for i in range(len(states)):
-            buffer.append([states[i], actions[i], next_states[i], rewards[i], dones[i], td_errors[i]])
+            buffer.append([states[i], actions[i], next_states[i], rewards[i], gamma_powers[i], dones[i], td_errors[i]])
         try:
             self.cmd_pipe.send([1, self.id])
             self.log(f'Replay data command sent.')
@@ -55,7 +58,7 @@ class Actor(object):
     @tf.function
     def train_actor_critic(self, states, actions, next_states, rewards, gammas, dones):
         target_mu = self.target_actor(next_states, training=False)
-        target_q = rewards + gammas * tf.reduce_max((1 - dones) * self.target_critic([next_states, target_mu], training=False), axis = 1)
+        target_q = rewards + tf.math.pow(self.gamma, gammas + 1) * tf.reduce_sum((1 - dones) * self.target_critic([next_states, target_mu], training=False), axis = 1)
 
         with tf.GradientTape() as tape:
             current_q = tf.squeeze(self.critic([states, actions], training=True), axis=1)
@@ -87,10 +90,9 @@ class Actor(object):
         self.target_critic = critic_network((env.observation_space.shape[0]), env.action_space.shape[0])
         self.target_critic.set_weights(self.critic.get_weights())
 
-        exp_buffer = APEX_NStep_Local_MemoryBuffer(self.batch_size, 3, self.gamma, env.observation_space.shape, env.action_space.shape)
+        exp_buffer = APEX_NStepReturn_RandomAccess_MemoryBuffer(1500, self.N, self.gamma, env.observation_space.shape, env.action_space.shape)
         rewards_history = []
         global_step = 0
-        training_batches_counter = 0
         for i in range(1000):
             if self.cancelation_token.value != 0:
                 break
@@ -108,16 +110,18 @@ class Actor(object):
                 next_observation, reward, done, _ = env.step(chosen_action)
                 exp_buffer.store(observation, chosen_action, next_observation, reward, float(done))
 
-                if global_step % self.batch_size == 0 and global_step > 0:
-                    replay_states, replay_actions, replay_next_states, replay_rewards, replay_gammas, replay_dones = exp_buffer()
+                if global_step > 2 * self.batch_size:
+                    replay_states, replay_actions, replay_next_states, replay_rewards, replay_gammas, replay_dones, idxs = exp_buffer(self.batch_size)
                     actor_loss, critic_loss, td_errors = self.train_actor_critic(replay_states, replay_actions, replay_next_states, replay_rewards, replay_gammas, replay_dones) 
+                    exp_buffer.update_td_errors(idxs, td_errors)
                     actor_loss_history.append(actor_loss)
                     critic_loss_history.append(critic_loss)
-                    self.send_replay_data(replay_states, replay_actions, replay_next_states, replay_rewards, replay_dones, td_errors)
-                    training_batches_counter += 1
-                    if training_batches_counter >= self.exchange_steps: # update target networks every 'exchange_steps'
-                        training_batches_counter = 0
-                        self.get_target_weights()
+
+                if global_step % (self.data_send_steps + self.N) == 0 and global_step > 0:
+                    self.send_replay_data(*exp_buffer.get_transfer_data(self.data_send_steps))
+
+                if global_step % self.exchange_steps == 0 and self.training_active.value > 0: # update target networks every 'exchange_steps'
+                    self.get_target_weights()
 
                 observation = next_observation
                 global_step+=1
@@ -134,6 +138,6 @@ class Actor(object):
 
 
 def RunActor(id:int, batch_size:int, gamma:float, actor_leraning_rate:float, critic_learning_rate:float,
-             cmd_pipe:mp.Pipe, weights_pipe:mp.Pipe, replay_data_pipe:mp.Pipe, cancelation_token:mp.Value):
-    actor = Actor(id, batch_size, gamma, actor_leraning_rate, critic_learning_rate, cmd_pipe, weights_pipe, replay_data_pipe, cancelation_token)
+             cmd_pipe:mp.Pipe, weights_pipe:mp.Pipe, replay_data_pipe:mp.Pipe, cancelation_token:mp.Value, training_active_flag:mp.Value):
+    actor = Actor(id, batch_size, gamma, actor_leraning_rate, critic_learning_rate, cmd_pipe, weights_pipe, replay_data_pipe, cancelation_token, training_active_flag)
     actor.run()
