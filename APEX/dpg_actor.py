@@ -61,7 +61,7 @@ class Actor(object):
             current_q = tf.squeeze(self.critic([states, actions], training=True), axis=1)
             #c_loss = self.mse_loss(current_q, target_q)
             td_errors = target_q - current_q
-            c_loss = tf.reduce_sum(tf.math.pow(td_errors, 2), axis=0) / states.shape[0]
+            c_loss = tf.reduce_mean(tf.math.pow(td_errors, 2))
         gradients = tape.gradient(c_loss, self.critic.trainable_variables)
         self.critic_optimizer.apply_gradients(zip(gradients, self.critic.trainable_variables))
 
