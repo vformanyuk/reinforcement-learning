@@ -84,13 +84,13 @@ class Actor(object):
         env = gym.make('LunarLanderContinuous-v2')
         self.actor = policy_network((env.observation_space.shape[0]), env.action_space.shape[0])
         self.target_actor = policy_network((env.observation_space.shape[0]), env.action_space.shape[0])
-        self.target_actor.set_weights(self.actor.get_weights())
         
         self.critic = critic_network((env.observation_space.shape[0]), env.action_space.shape[0])
         self.target_critic = critic_network((env.observation_space.shape[0]), env.action_space.shape[0])
-        self.target_critic.set_weights(self.critic.get_weights())
 
-        exp_buffer = APEX_NStepReturn_RandomAccess_MemoryBuffer(1500, self.N, self.gamma, env.observation_space.shape, env.action_space.shape)
+        self.get_target_weights()
+
+        exp_buffer = APEX_NStepReturn_RandomAccess_MemoryBuffer(512, self.N, self.gamma, env.observation_space.shape, env.action_space.shape)
         rewards_history = []
         global_step = 0
         for i in range(1000):
