@@ -8,7 +8,8 @@ from time import sleep
 from APEX.APEX_Rank_Priority_MemoryBuffer import APEX_Rank_Priority_MemoryBuffer
 from rl_utils.OUActionNoise import OUActionNoise
 from APEX.neural_networks import policy_network, critic_network
-from APEX.dpg_actor import RunActor
+#from APEX.dpg_actor import RunActor
+from APEX.dpg_actor_slim import RunActor
 from APEX.dpg_learner import RunLearner
 from multiprocessing import Process, Pipe, Value
 from threading import Thread, Lock
@@ -22,22 +23,23 @@ if __name__ == '__main__':
         if orchestrator_debug_mode:
             print(f'[Orchestrator] {msg}')
 
-    def actor_cmd_processor(actor, critic, replay_buffer, cmd_pipe, actor_weight_pipes, replay_data_pipes, sync_obj):
+    def actor_cmd_processor(actor, critic, replay_buffer, cmd_pipe, actor_weight_pipes, replay_data_pipes, net_sync_obj, data_sync_obj):
         connection_alive = True
         while connection_alive:
             try:
                 cmd = cmd_pipe.recv()
                 orchestrator_log(f'Got actor {cmd[1]} command {cmd[0]}')
                 if cmd[0] == 0:
-                    with sync_obj:
+                    with net_sync_obj:
                         actor_weight_pipes[cmd[1]][1].send([actor.get_weights(), critic.get_weights()])
                     orchestrator_log(f'Sent target weights for actor {cmd[1]}')
                     continue
                 if cmd[0] == 1:
                     replay_data = replay_data_pipes[cmd[1]][0].recv()
-                    for r in replay_data:
-                        # state, action, next_state, reward, gamma_power, done, td_error
-                        replay_buffer.store(r[0], r[1], r[2], r[3], r[4], r[5], r[6])
+                    with data_sync_obj:
+                        for r in replay_data:
+                            # state, action, next_state, reward, gamma_power, done, td_error
+                            replay_buffer.store(r[0], r[1], r[2], r[3], r[4], r[5], r[6])
                     orchestrator_log(f'Got replay data from actor {cmd[1]}')
                     continue
             except EOFError:
@@ -47,7 +49,7 @@ if __name__ == '__main__':
                 print('Handle closed.')
                 connection_alive = False
 
-    def learner_cmd_processor(traget_policy, target_critic, replay_buffer, cmd_pipe, learner_weights_pipe, replay_data_pipe, priorities_pipe, sync_obj):
+    def learner_cmd_processor(traget_policy, target_critic, replay_buffer, cmd_pipe, learner_weights_pipe, replay_data_pipe, priorities_pipe, net_sync_obj, data_sync_obj):
         global networks_initialized
         connection_alive = True
         while connection_alive:
@@ -56,7 +58,7 @@ if __name__ == '__main__':
                 orchestrator_log(f'Got learner command {cmd}')
                 if cmd == 0: # update target networks
                     weights = learner_weights_pipe.recv()
-                    with sync_obj:
+                    with net_sync_obj:
                         traget_policy.set_weights(weights[0])
                         target_critic.set_weights(weights[1])
                         networks_initialized = True
@@ -71,8 +73,9 @@ if __name__ == '__main__':
                     continue
                 if cmd == 2: # update priorities
                     data = priorities_pipe.recv()
-                    for r in data:
-                        replay_buffer.update_priorities(r[0], r[1])
+                    with data_sync_obj:
+                        for r in data:
+                            replay_buffer.update_priorities(r[0], r[1])
                     continue
             except EOFError:
                 print("Connection closed.")
@@ -100,6 +103,7 @@ if __name__ == '__main__':
     exp_buffer = APEX_Rank_Priority_MemoryBuffer(1000000, learner_batch_size, env.observation_space.shape, env.action_space.shape)
 
     weights_sync = Lock()
+    data_sync = Lock()
 
     actor_cmd_read_pipe, actor_cmd_write_pipe = Pipe(False)
     learner_cmd_read_pipe, learner_cmd_write_pipe = Pipe(False)
@@ -127,12 +131,12 @@ if __name__ == '__main__':
 
     actor_cmd_processor_thread = Thread(target=actor_cmd_processor, args=(target_policy_net, target_critic_net, exp_buffer, \
                                                                     actor_cmd_read_pipe, weights_distribution_pipes, replay_data_distribution_pipes, \
-                                                                    weights_sync))
+                                                                    weights_sync, data_sync))
     actor_cmd_processor_thread.start()
 
     learner_cmd_processor_thread = Thread(target=learner_cmd_processor, args=(target_policy_net, target_critic_net, exp_buffer, \
                                                                     learner_cmd_read_pipe, learner_weights_read_pipe, learner_replay_data_write_pipe, learner_priorities_read_pipe, \
-                                                                    weights_sync))
+                                                                    weights_sync, data_sync))
     learner_cmd_processor_thread.start()
 
     # 1. Init networks at learner

@@ -1,3 +1,4 @@
+import gym
 import numpy as np
 import tensorflow as tf
 import multiprocessing as mp
@@ -27,7 +28,6 @@ class Learner(object):
         tf.config.experimental.set_memory_growth(gpus[0], True)
 
         self.batch_size = batch_size
-        self.num_episodes = 5000
         self.gamma = gamma
         self.tau = 0.001
 
@@ -53,6 +53,22 @@ class Learner(object):
         self.target_critic = critic_network(state_space_shape[0], action_space_shape[0])
         self.target_critic.set_weights(self.critic.get_weights())
 
+    def validate(self):
+        env = gym.make('LunarLanderContinuous-v2')
+        done = False
+        observation = env.reset()
+
+        episodic_reward = 0
+
+        while not done:
+            #env.render()
+            chosen_action = self.actor(np.expand_dims(observation, axis = 0), training=False)[0].numpy()
+            next_observation, reward, done, _ = env.step(chosen_action)
+            observation = next_observation
+            episodic_reward += reward
+        env.close()
+        print(f'\t\t[Learner] Validation run total reward = {episodic_reward}')
+
     def run(self):
         self.cmd_pipe.send(CMD_SET_NETWORK_WEIGHTS) #initial target networks distribution
         self.weights_pipe.send([self.actor.get_weights(), self.critic.get_weights()])
@@ -60,6 +76,7 @@ class Learner(object):
         while self.buffer_ready_flag.value < 1:
             sleep(1)
 
+        training_runs = 1
         while self.cancellation_token.value == 0:
             self.cmd_pipe.send(CMD_GET_REPLAY_DATA)
             batches = self.replay_data_pipe.recv()
@@ -71,6 +88,9 @@ class Learner(object):
             self.priorities_pipe.send(priorities_updates)
             if self.training_active.value == 0:
                 self.training_active.value = 1
+            if training_runs % 10 == 0:
+                self.validate()
+            training_runs += 1
 
     @tf.function
     def __train_actor_critic(self, states, actions, next_states, rewards, gamma_powers, dones, is_weights):

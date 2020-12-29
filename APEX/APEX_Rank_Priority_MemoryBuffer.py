@@ -99,6 +99,8 @@ class APEX_Rank_Priority_MemoryBuffer(object):
         for idx, err in zip(meta_idxs, np.abs(td_errors)):
             container_to_remove = self.ordered_storage.pop(idx)
             bs.insort_right(self.ordered_storage, rank_container(container_to_remove.replay_buffer_idx, err)) # O(n)
+            #self.ordered_storage[idx].td_error = err
+        #self.ordered_storage.sort()
 
     def __len__(self):
         return self.memory_idx
