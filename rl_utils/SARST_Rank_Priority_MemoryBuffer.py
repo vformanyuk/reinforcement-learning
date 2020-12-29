@@ -94,11 +94,14 @@ class SARST_Rank_Priority_MemoryBuffer(object):
         self.memory_idx += 1
 
     def update_priorities(self, meta_idxs, td_errors):
-        for idx, err in zip(meta_idxs, np.abs(td_errors)):
+        to_remove = []
+        # because indexes are fetched in reversed way, items are poped from the end and thus array indexes of preciding items are not affected
+        for idx in meta_idxs:
+            to_remove.append(self.ordered_storage.pop(idx))
+        for container, err in zip(to_remove, np.abs(td_errors)):
             if err > self.td_max:
                 self.td_max = err
-            container_to_remove = self.ordered_storage.pop(idx)
-            bs.insort_right(self.ordered_storage, rank_container(container_to_remove.replay_buffer_idx, err)) # O(n)
+            bs.insort_right(self.ordered_storage, rank_container(container.replay_buffer_idx, err)) # O(n)
 
     def __call__(self):
         idxs = list()
@@ -133,4 +136,4 @@ class SARST_Rank_Priority_MemoryBuffer(object):
             tf.stack(self.rewards_memory[idxs]), \
             tf.stack(self.dones_memory[idxs]), \
             tf.convert_to_tensor(importance_sampling_weights / self.max_is_weight, dtype=tf.float32), \
-            meta_idxs
+            meta_idxs #indexes are ordere indescending order due to reversed way of fetching
