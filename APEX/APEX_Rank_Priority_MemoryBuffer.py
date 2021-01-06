@@ -91,16 +91,17 @@ class APEX_Rank_Priority_MemoryBuffer(object):
         if self.memory_idx >= self.buffer_size:
             self.ordered_storage.remove(self.lookup[write_idx]) # O(n)
         container = rank_container(write_idx, td_error)
-        bs.insort_right(self.ordered_storage, container) # O(n)
+        bs.insort_right(self.ordered_storage, container) # O(logN) + O(n)
         self.lookup[write_idx] = container
         self.memory_idx += 1
 
     def update_priorities(self, meta_idxs, td_errors):
-        for idx, err in zip(meta_idxs, np.abs(td_errors)):
-            container_to_remove = self.ordered_storage.pop(idx)
-            bs.insort_right(self.ordered_storage, rank_container(container_to_remove.replay_buffer_idx, err)) # O(n)
-            #self.ordered_storage[idx].td_error = err
-        #self.ordered_storage.sort()
+        to_remove = []
+        # because indexes are fetched in reversed way, items are poped from the end and thus array indexes of preciding items are not affected
+        for idx in meta_idxs:
+            to_remove.append(self.ordered_storage.pop(idx))
+        for container, err in zip(to_remove, td_errors):
+            bs.insort_right(self.ordered_storage, rank_container(container.replay_buffer_idx, err)) # O(logN) + O(n)
 
     def __len__(self):
         return self.memory_idx

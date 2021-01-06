@@ -2,7 +2,9 @@
 import numpy as np
 import tensorflow as tf
 
-class APEX_NStepReturn_RandomAccess_MemoryBuffer(object):
+from itertools import chain
+
+class APEX_NStepReturn_MemoryBuffer(object):
     def __init__(self, buffer_size, N, gamma, state_shape, action_shape, action_type = np.float32):
         self.states_memory = np.empty(shape=(buffer_size, *state_shape), dtype = np.float32)
         self.next_states_memory = np.empty(shape=(buffer_size, *state_shape), dtype = np.float32)
@@ -46,20 +48,17 @@ class APEX_NStepReturn_RandomAccess_MemoryBuffer(object):
     def reset(self):
         self.memory_idx = 0
 
-    def is_buffer_ready(self, boundary=None):
-        if boundary is None:
-            boundary = self.N * 2
-        upper_bound = (self.memory_idx - 1) if self.memory_idx < self.buffer_size else (self.buffer_size - 1)
-        return upper_bound >= boundary, upper_bound
-
-    def get_transfer_data(self, transfer_len):
-        is_full_enough, upper_bound = self.is_buffer_ready(transfer_len)
-        if not is_full_enough:
-            raise IndexError()
-
-        if self.dones_memory[upper_bound] < 1:
-            upper_bound -= self.N # last N records don't have full n-step return calculated, unless it is a terminal state.
-        idxs = range(upper_bound - transfer_len, upper_bound)
+    def get_tail_batch(self, transfer_len):
+        upper_bound = self.memory_idx % self.buffer_size
+        lower_bound = upper_bound - transfer_len
+        tail_interval = 0
+        if lower_bound < 0:
+            tail_interval = np.abs(lower_bound)
+            lower_bound = 0
+            
+        idxs = range(lower_bound, upper_bound)
+        if tail_interval > 0:
+            idxs = chain(idxs, range(self.buffer_size - tail_interval, self.buffer_size))
         return tf.stack(self.states_memory[idxs]), \
             tf.stack(self.actions_memory[idxs]), \
             tf.stack(self.next_states_memory[idxs]), \
@@ -69,12 +68,10 @@ class APEX_NStepReturn_RandomAccess_MemoryBuffer(object):
             tf.stack(self.td_errors_memory[idxs])
 
     def __call__(self, batch_size):
-        is_full_enough, upper_bound = self.is_buffer_ready(batch_size)
-        if not is_full_enough:
-            raise IndexError()
+        upper_bound = (self.memory_idx - 1) if self.memory_idx < self.buffer_size else (self.buffer_size - 1)
 
-        if self.dones_memory[upper_bound] < 1:
-            upper_bound -= self.N # last N records don't have full n-step return calculated, unless it is a terminal state.
+        #if self.dones_memory[upper_bound] < 1:
+        #    upper_bound -= self.N # last N records don't have full n-step return calculated, unless it is a terminal state.
         idxs = np.random.permutation(upper_bound)[:batch_size]
         return tf.stack(self.states_memory[idxs]), \
             tf.stack(self.actions_memory[idxs]), \

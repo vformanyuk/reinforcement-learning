@@ -3,12 +3,11 @@ import numpy as np
 import tensorflow as tf
 import multiprocessing as mp
 
-from APEX.neural_networks import policy_network, critic_network
+from APEX.neural_networks import q_network
 from APEX.APEX_Local_MemoryBuffer import APEX_NStepReturn_MemoryBuffer
-from rl_utils.OUActionNoise import OUActionNoise
 
-class ActorSlim(object):
-    def __init__(self, id:int, gamma:float,
+class DQNActor(object):
+    def __init__(self, id:int, gamma:float, epsilon:float,
                  cmd_pipe:mp.Pipe, weights_pipe:mp.Pipe, replay_pipe:mp.Pipe, cancelation_token:mp.Value, training_active_flag:mp.Value,
                  *args, **kwargs):
         self.debug_mode = False
@@ -22,6 +21,7 @@ class ActorSlim(object):
         self.data_send_steps = 50
         self.tau = 0.01 #1 / self.exchange_steps #0.001
         self.gamma = gamma
+        self.epsilon = epsilon
         self.N = 5
 
     def log(self, msg):
@@ -32,8 +32,7 @@ class ActorSlim(object):
         try:
             self.cmd_pipe.send([0, self.id])
             weights = self.weights_pipe.recv()
-            self.target_actor.set_weights(weights[0])
-            self.target_critic.set_weights(weights[1])
+            self.target_Q.set_weights(weights[0])
             self.log(f'Target actor and target critic weights refreshed.')
         except EOFError:
             print("[get_target_weights] Connection closed.")
@@ -54,22 +53,14 @@ class ActorSlim(object):
         except OSError:
             print("[send_replay_data] Connection closed.")
 
-    def __soft_update_models(self):
-        target_actor_weights = self.target_actor.get_weights()
-        actor_weights = self.actor.get_weights()
-        updated_actor_weights = []
-        for aw,taw in zip(actor_weights,target_actor_weights):
+    def __reverse_soft_update_models(self):
+        target_weights = self.target_Q.get_weights()
+        q_weights = self.main_Q.get_weights()
+        updated_weights = []
+        for aw,taw in zip(q_weights,target_weights):
             #updated_actor_weights.append(self.tau * aw + (1.0 - self.tau) * taw)
-            updated_actor_weights.append(self.tau * taw + (1.0 - self.tau) * aw) #reversed
-        self.actor.set_weights(updated_actor_weights) #target_actor
-
-        target_critic_weights = self.target_critic.get_weights()
-        critic_weights = self.critic.get_weights()
-        updated_critic_weights = []
-        for cw,tcw in zip(critic_weights,target_critic_weights):
-            #updated_critic_weights.append(self.tau * cw + (1.0 - self.tau) * tcw)
-            updated_critic_weights.append(self.tau * tcw + (1.0 - self.tau) * cw) #reversed
-        self.critic.set_weights(updated_critic_weights) #target_critic
+            updated_weights.append(self.tau * taw + (1.0 - self.tau) * aw) #reversed
+        self.main_Q.set_weights(updated_weights) #target_actor
 
     def __prepare_and_send_replay_data(self, exp_buffer:APEX_NStepReturn_MemoryBuffer, batch_length:int):
         states, actions, next_states, rewards, gamma_powers, dones, _ = exp_buffer.get_tail_batch(batch_length)
@@ -78,30 +69,37 @@ class ActorSlim(object):
 
     @tf.function(experimental_relax_shapes=True)
     def get_td_errors(self, states, actions, next_states, rewards, gamma_powers, dones):
-        target_mu = self.target_actor(next_states, training=False)
-        target_q = rewards + tf.math.pow(self.gamma, gamma_powers + 1) * tf.reduce_max((1 - dones) * self.target_critic([next_states, target_mu], training=False), axis = 1)
-        current_q = tf.squeeze(self.critic([states, actions], training=False), axis=1)
-        return tf.math.abs(target_q - current_q)
+        one_hot_actions_mask = tf.one_hot(actions, depth=self.action_space_dims, on_value = 1.0, off_value = 0.0, dtype=tf.float32) #shape batch_size,4
+
+        target_Q_values = self.target_Q(next_states, training=False) # shape = (batch_size,4)
+        target_y = rewards + tf.math.pow(self.gamma, gamma_powers + 1) * tf.reduce_max(target_Q_values, axis=1) * (1 - dones) # shape = (batch_size,)
+    
+        pred_Q_values = self.main_Q(states, training=False) # shape = (batch_size,4)
+        pred_y = tf.reduce_sum(tf.math.multiply(pred_Q_values, one_hot_actions_mask), axis=1) # Q values for non-chosen action do not impact loss. shape = (batch_size,)
+
+        return tf.math.abs(target_y - pred_y)
+
+    def epsilon_greedy(self, env, observation):
+        if np.random.rand() < self.epsilon:
+            return np.random.randint(env.action_space.n)
+        else:
+            #q_actions =  self.main_Q.predict(np.expand_dims(observation, axis = 0))
+            q_actions = self.main_Q(np.expand_dims(observation, axis = 0), training=False)[0].numpy()
+            return np.argmax(q_actions)
 
     def run(self):
         # this configuration must be done for every module
         gpus = tf.config.experimental.list_physical_devices('GPU')
         tf.config.experimental.set_memory_growth(gpus[0], True)
 
-        env = gym.make('LunarLanderContinuous-v2')
-        self.actor = policy_network((env.observation_space.shape[0]), env.action_space.shape[0])
-        self.target_actor = policy_network((env.observation_space.shape[0]), env.action_space.shape[0])
-        self.target_actor.set_weights(self.actor.get_weights())
-        
-        self.critic = critic_network((env.observation_space.shape[0]), env.action_space.shape[0])
-        self.target_critic = critic_network((env.observation_space.shape[0]), env.action_space.shape[0])
-        self.target_critic.set_weights(self.critic.get_weights())
+        env = gym.make('LunarLander-v2')
+        self.main_Q = q_network((env.observation_space.shape[0]), env.action_space.n)
+        self.target_Q = q_network((env.observation_space.shape[0]), env.action_space.n)
+        self.action_space_dims = env.action_space.n
 
         self.get_target_weights()
 
-        action_noise = OUActionNoise(mu=np.zeros(env.action_space.shape[0]))
-
-        exp_buffer = APEX_NStepReturn_MemoryBuffer(1001, self.N, self.gamma, env.observation_space.shape, env.action_space.shape)
+        exp_buffer = APEX_NStepReturn_MemoryBuffer(1001, self.N, self.gamma, env.observation_space.shape, env.action_space.shape, action_type = np.int32)
         rewards_history = []
         
         global_step = 0
@@ -121,7 +119,7 @@ class ActorSlim(object):
             actor_loss_history = []
 
             while not done and self.cancelation_token.value == 0:
-                chosen_action = self.actor(np.expand_dims(observation, axis = 0), training=False)[0].numpy() + action_noise()
+                chosen_action = self.epsilon_greedy(env, observation)
                 next_observation, reward, done, _ = env.step(chosen_action)
                 exp_buffer.store(observation, chosen_action, next_observation, reward, float(done))
 
@@ -133,7 +131,7 @@ class ActorSlim(object):
                     self.get_target_weights()
 
                 if global_step % 10 == 0:
-                    self.__soft_update_models()
+                    self.__reverse_soft_update_models()
                     
                 observation = next_observation
                 global_step+=1
@@ -154,7 +152,7 @@ class ActorSlim(object):
         env.close()
 
 
-def RunActor(id:int, gamma:float,
+def RunActor(id:int, gamma:float, epsilon:float,
              cmd_pipe:mp.Pipe, weights_pipe:mp.Pipe, replay_data_pipe:mp.Pipe, cancelation_token:mp.Value, training_active_flag:mp.Value):
-    actor = ActorSlim(id, gamma, cmd_pipe, weights_pipe, replay_data_pipe, cancelation_token, training_active_flag)
+    actor = DQNActor(id, gamma, epsilon, cmd_pipe, weights_pipe, replay_data_pipe, cancelation_token, training_active_flag)
     actor.run()

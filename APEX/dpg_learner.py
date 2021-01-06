@@ -29,7 +29,7 @@ class Learner(object):
 
         self.batch_size = batch_size
         self.gamma = gamma
-        self.tau = 0.001
+        self.tau = 0.01
 
         self.cmd_pipe = cmd_pipe
         self.weights_pipe = weights_pipe
@@ -80,22 +80,31 @@ class Learner(object):
         while self.cancellation_token.value == 0:
             self.cmd_pipe.send(CMD_GET_REPLAY_DATA)
             batches = self.replay_data_pipe.recv()
+            
             priorities_updates = []
             for b in batches:
                 actor_loss, critic_loss, td_errors = self.__train_actor_critic(b[0],b[1],b[2],b[3],b[4],b[5],b[6])
                 priorities_updates.append((b[7], td_errors))
+            
             self.cmd_pipe.send(CMD_UPDATE_PRIORITIES)
             self.priorities_pipe.send(priorities_updates)
+            
             if self.training_active.value == 0:
                 self.training_active.value = 1
-            if training_runs % 10 == 0:
+            if training_runs % 5 == 0:
+                self.__soft_update_models()
+            if training_runs % 20 == 0:
                 self.validate()
+            if training_runs % 10 == 0:
+                self.cmd_pipe.send(CMD_SET_NETWORK_WEIGHTS)
+                self.weights_pipe.send([self.actor.get_weights(), self.critic.get_weights()])
+            
             training_runs += 1
 
     @tf.function
     def __train_actor_critic(self, states, actions, next_states, rewards, gamma_powers, dones, is_weights):
         target_mu = self.target_policy(next_states, training=False)
-        target_q = rewards + tf.math.pow(self.gamma, gamma_powers + 1) * tf.reduce_sum((1 - dones) * self.target_critic([next_states, target_mu], training=False), axis = 1)
+        target_q = rewards + tf.math.pow(self.gamma, gamma_powers + 1) * tf.reduce_max((1 - dones) * self.target_critic([next_states, target_mu], training=False), axis = 1)
 
         with tf.GradientTape() as tape:
             current_q = self.critic([states, actions], training=True)
@@ -110,21 +119,21 @@ class Learner(object):
             a_loss = tf.reduce_mean(-current_q)
         gradients = tape.gradient(a_loss, self.actor.trainable_variables)
         self.actor_optimizer.apply_gradients(zip(gradients, self.actor.trainable_variables))
-        return a_loss, c_loss, td_errors
+        return a_loss, c_loss, tf.math.abs(td_errors)
 
     def __soft_update_models(self):
         target_actor_weights = self.target_policy.get_weights()
         actor_weights = self.actor.get_weights()
         updated_actor_weights = []
         for aw,taw in zip(actor_weights,target_actor_weights):
-            updated_actor_weights.append(tau * aw + (1.0 - tau) * taw)
+            updated_actor_weights.append(self.tau * aw + (1.0 - self.tau) * taw)
         self.target_policy.set_weights(updated_actor_weights)
 
         target_critic_weights = self.target_critic.get_weights()
         critic_weights = self.critic.get_weights()
         updated_critic_weights = []
         for cw,tcw in zip(critic_weights,target_critic_weights):
-            updated_critic_weights.append(tau * cw + (1.0 - tau) * tcw)
+            updated_critic_weights.append(self.tau * cw + (1.0 - self.tau) * tcw)
         self.target_critic.set_weights(updated_critic_weights)
 
 def RunLearner(batch_size:int, gamma:float, actor_leraning_rate:float, critic_learning_rate:float,

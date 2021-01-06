@@ -45,3 +45,12 @@ def critic_network(input_shape, outputs_count):
 
     model = keras.Model(inputs=[input, actions_input], outputs=q_layer)
     return model
+
+def q_network(input_shape, outputs_count):
+    input = keras.layers.Input(shape=(input_shape))
+    x = keras.layers.Dense(256, activation='relu')(input)
+    x = keras.layers.Dense(128, activation='relu')(x)
+    output = keras.layers.Dense(outputs_count, activation='linear')(x)
+
+    model = keras.Model(inputs=input, outputs=output)
+    return model

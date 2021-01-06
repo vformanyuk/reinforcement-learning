@@ -23,13 +23,16 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="APEX\dpg_actor_slim.py" />
-    <Compile Include="APEX\dpg_actor.py">
-      <SubType>Code</SubType>
-    </Compile>
     <Compile Include="APEX\dpg_learner.py">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="APEX\APEX_Local_MemoryBuffer.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="APEX\dqn_actor.py">
+      <SubType>Code</SubType>
+    </Compile>
+    <Compile Include="APEX\dqn_learner.py">
       <SubType>Code</SubType>
     </Compile>
     <Compile Include="APEX\neural_networks.py">
