@@ -152,6 +152,7 @@ class ActorSlim(object):
                 self.actor.save(f'lunar_lander_apex_dpg_{self.id}.h5')
                 break
         env.close()
+        print(f'Agent [{self.id}] done training.')
 
 
 def RunActor(id:int, gamma:float,

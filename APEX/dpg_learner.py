@@ -30,6 +30,7 @@ class Learner(object):
         self.batch_size = batch_size
         self.gamma = gamma
         self.tau = 0.01
+        self.finish_criteria = 200
 
         self.cmd_pipe = cmd_pipe
         self.weights_pipe = weights_pipe
@@ -68,6 +69,7 @@ class Learner(object):
             episodic_reward += reward
         env.close()
         print(f'\t\t[Learner] Validation run total reward = {episodic_reward}')
+        return episodic_reward
 
     def run(self):
         self.cmd_pipe.send(CMD_SET_NETWORK_WEIGHTS) #initial target networks distribution
@@ -76,6 +78,7 @@ class Learner(object):
         while self.buffer_ready_flag.value < 1:
             sleep(1)
 
+        rewards = []
         training_runs = 1
         while self.cancellation_token.value == 0:
             self.cmd_pipe.send(CMD_GET_REPLAY_DATA)
@@ -94,12 +97,15 @@ class Learner(object):
             if training_runs % 5 == 0:
                 self.__soft_update_models()
             if training_runs % 20 == 0:
-                self.validate()
+                rewards.append(self.validate())
+                if np.mean(rewards[-100:]) >= self.finish_criteria:
+                    self.cancellation_token.value = 1
             if training_runs % 10 == 0:
                 self.cmd_pipe.send(CMD_SET_NETWORK_WEIGHTS)
                 self.weights_pipe.send([self.actor.get_weights(), self.critic.get_weights()])
             
             training_runs += 1
+        print('\t\t[Learner] training complete.')
 
     @tf.function
     def __train_actor_critic(self, states, actions, next_states, rewards, gamma_powers, dones, is_weights):

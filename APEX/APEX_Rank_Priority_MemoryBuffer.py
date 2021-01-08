@@ -31,6 +31,8 @@ class APEX_Rank_Priority_MemoryBuffer(object):
         self.max_is_weight = 1
         self.ordered_storage = list()
         self.lookup = dict()
+        self.internal_ordering_counter = 0
+        self.internal_ordering_threshold = 500
 
     '''
     Calculate analogue of Euler–Mascheroni constant for chosen alpha
@@ -72,10 +74,10 @@ class APEX_Rank_Priority_MemoryBuffer(object):
     N=10**6
     K=128
     segment_len = aprox_total / batch_size
-    __get_threshold(0, a, l=segment_len)=72
-    __get_threshold(1, a, l=segment_len)=267
+    __get_sampling_interval_boundary(0, a, l=segment_len)=72
+    __get_sampling_interval_boundary(1, a, l=segment_len)=267
     ...
-    __get_threshold(K, a, l=segment_len)=999999
+    __get_sampling_interval_boundary(K, a, l=segment_len)=999999
     '''
     def __get_sampling_interval_boundary(self, interval_idx, interval_len):
         return np.exp(np.log((interval_len*interval_idx - self.gamma_s)*(1-self.alpha) + 1) / (1-self.alpha))
@@ -89,10 +91,16 @@ class APEX_Rank_Priority_MemoryBuffer(object):
         self.gamma_powers_memory[write_idx] = gamma_power
         self.dones_memory[write_idx] = is_terminal
         if self.memory_idx >= self.buffer_size:
-            self.ordered_storage.remove(self.lookup[write_idx]) # O(n)
-        container = rank_container(write_idx, td_error)
-        bs.insort_right(self.ordered_storage, container) # O(logN) + O(n)
-        self.lookup[write_idx] = container
+            self.lookup[write_idx].td_error = td_error
+            self.internal_ordering_counter += 1
+
+            if self.internal_ordering_counter > self.internal_ordering_threshold:
+                self.ordered_storage.sort()
+                self.internal_ordering_counter = 0
+        else:
+            container = rank_container(write_idx, td_error)
+            bs.insort_right(self.ordered_storage, container) # O(logN) + O(n)
+            self.lookup[write_idx] = container
         self.memory_idx += 1
 
     def update_priorities(self, meta_idxs, td_errors):
@@ -117,7 +125,7 @@ class APEX_Rank_Priority_MemoryBuffer(object):
         interval_start = 0
         for k in range(self.batch_size):
             boundary = int(np.ceil(self.__get_sampling_interval_boundary(k, segment_len)))
-            interval_end = (interval_start+1) if boundary <= interval_start else boundary
+            interval_end = (interval_start+1) if boundary <= interval_start else (boundary if boundary < storage_len else storage_len)
             meta_idx = np.random.randint(low=storage_len - interval_end, high=storage_len - interval_start, size=1)[0] #reverse intervals because higher error records are in the end
             container = self.ordered_storage[meta_idx]
             idxs.append(container.replay_buffer_idx)
