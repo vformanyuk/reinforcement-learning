@@ -1,8 +1,10 @@
 import gym
 import numpy as np
+import os
 import tensorflow as tf
 import multiprocessing as mp
 
+from tensorflow import keras
 from time import sleep
 from typing import Tuple
 
@@ -31,6 +33,7 @@ class Learner(object):
         self.gamma = gamma
         self.tau = 0.01
         self.finish_criteria = 200
+        self.checkpoint_step = 100
 
         self.cmd_pipe = cmd_pipe
         self.weights_pipe = weights_pipe
@@ -44,15 +47,34 @@ class Learner(object):
         self.actor_optimizer = tf.keras.optimizers.Adam(actor_learning_rate)
         self.critic_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
 
-        print(f'state space {state_space_shape}\naction space{action_space_shape}')
+        self.actor_network_file = "apex-dpg-learner-actor.h5"
+        self.target_actor_network_file = "apex-dpg-learner-target_actor.h5"
+        self.critic_network_file = "apex-dpg-learner-critic.h5"
+        self.target_critic_network_file = "apex-dpg-learner-target_critic.h5"
 
-        self.actor = policy_network(state_space_shape[0], action_space_shape[0])
-        self.target_policy = policy_network(state_space_shape[0], action_space_shape[0])
-        self.target_policy.set_weights(self.actor.get_weights())
+        if os.path.isfile(self.actor_network_file):
+            self.actor = keras.models.load_model(self.actor_network_file)
+            print("Actor Model restored from checkpoint.")
+        else:
+            self.actor = policy_network(state_space_shape[0], action_space_shape[0])
+        if os.path.isfile(self.target_actor_network_file):
+            self.target_policy = keras.models.load_model(self.target_actor_network_file)
+            print("Target Actor Model restored from checkpoint.")
+        else:
+            self.target_policy = policy_network(state_space_shape[0], action_space_shape[0])
+            self.target_policy.set_weights(self.actor.get_weights())
 
-        self.critic = critic_network(state_space_shape[0], action_space_shape[0])
-        self.target_critic = critic_network(state_space_shape[0], action_space_shape[0])
-        self.target_critic.set_weights(self.critic.get_weights())
+        if os.path.isfile(self.critic_network_file):
+            self.critic = keras.models.load_model(self.critic_network_file)
+            print("Critic Model restored from checkpoint.")
+        else:
+            self.critic = critic_network(state_space_shape[0], action_space_shape[0])
+        if os.path.isfile(self.target_critic_network_file):
+            self.target_critic = keras.models.load_model(self.target_critic_network_file)
+            print("Target Critic Model restored from checkpoint.")
+        else:
+            self.target_critic = critic_network(state_space_shape[0], action_space_shape[0])
+            self.target_critic.set_weights(self.critic.get_weights())
 
     def validate(self):
         env = gym.make('LunarLanderContinuous-v2')
@@ -103,6 +125,12 @@ class Learner(object):
             if training_runs % 10 == 0:
                 self.cmd_pipe.send(CMD_SET_NETWORK_WEIGHTS)
                 self.weights_pipe.send([self.actor.get_weights(), self.critic.get_weights()])
+            if training_runs % self.checkpoint_step == 0:
+                self.actor.save(self.actor_network_file)
+                self.critic.save(self.critic_network_file)
+                self.target_policy.save(self.target_actor_network_file)
+                self.target_critic.save(self.target_critic_network_file)
+                print(f'\t\t[Learner] Checkpoint saved on {training_runs} step')
             
             training_runs += 1
         print('\t\t[Learner] training complete.')

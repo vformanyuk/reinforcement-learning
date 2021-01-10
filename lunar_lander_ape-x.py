@@ -69,8 +69,9 @@ if __name__ == '__main__':
                     continue
                 if cmd == 1: # fetch N batches of data
                     data = []
-                    for _ in range(learner_prefetch_batches):
-                        data.append([*replay_buffer()])
+                    with data_sync_obj:
+                        for _ in range(learner_prefetch_batches):
+                            data.append([*replay_buffer()])
                     replay_data_pipe.send(data)
                     orchestrator_log(f'Sent {learner_prefetch_batches} batches of data to learner')
                     continue

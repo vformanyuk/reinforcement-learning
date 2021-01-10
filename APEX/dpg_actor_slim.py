@@ -32,8 +32,8 @@ class ActorSlim(object):
         try:
             self.cmd_pipe.send([0, self.id])
             weights = self.weights_pipe.recv()
-            self.target_actor.set_weights(weights[0])
-            self.target_critic.set_weights(weights[1])
+            self.actor.set_weights(weights[0])
+            self.critic.set_weights(weights[1])
             self.log(f'Target actor and target critic weights refreshed.')
         except EOFError:
             print("[get_target_weights] Connection closed.")
@@ -59,17 +59,15 @@ class ActorSlim(object):
         actor_weights = self.actor.get_weights()
         updated_actor_weights = []
         for aw,taw in zip(actor_weights,target_actor_weights):
-            #updated_actor_weights.append(self.tau * aw + (1.0 - self.tau) * taw)
-            updated_actor_weights.append(self.tau * taw + (1.0 - self.tau) * aw) #reversed
-        self.actor.set_weights(updated_actor_weights) #target_actor
+            updated_actor_weights.append(self.tau * aw + (1.0 - self.tau) * taw)
+        self.target_actor.set_weights(updated_actor_weights)
 
         target_critic_weights = self.target_critic.get_weights()
         critic_weights = self.critic.get_weights()
         updated_critic_weights = []
         for cw,tcw in zip(critic_weights,target_critic_weights):
-            #updated_critic_weights.append(self.tau * cw + (1.0 - self.tau) * tcw)
-            updated_critic_weights.append(self.tau * tcw + (1.0 - self.tau) * cw) #reversed
-        self.critic.set_weights(updated_critic_weights) #target_critic
+            updated_critic_weights.append(self.tau * cw + (1.0 - self.tau) * tcw)
+        self.target_critic.set_weights(updated_critic_weights)
 
     def __prepare_and_send_replay_data(self, exp_buffer:APEX_NStepReturn_MemoryBuffer, batch_length:int):
         states, actions, next_states, rewards, gamma_powers, dones, _ = exp_buffer.get_tail_batch(batch_length)

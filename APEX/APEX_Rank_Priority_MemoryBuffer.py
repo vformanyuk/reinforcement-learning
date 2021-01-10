@@ -125,8 +125,8 @@ class APEX_Rank_Priority_MemoryBuffer(object):
         interval_start = 0
         for k in range(self.batch_size):
             boundary = int(np.ceil(self.__get_sampling_interval_boundary(k, segment_len)))
-            interval_end = (interval_start+1) if boundary <= interval_start else (boundary if boundary < storage_len else storage_len)
-            meta_idx = np.random.randint(low=storage_len - interval_end, high=storage_len - interval_start, size=1)[0] #reverse intervals because higher error records are in the end
+            interval_end = (interval_start+1) if boundary <= interval_start else boundary
+            meta_idx = np.random.randint(low=max(storage_len - interval_end, 0), high=storage_len - interval_start, size=1)[0] #reverse intervals because higher error records are in the end
             container = self.ordered_storage[meta_idx]
             idxs.append(container.replay_buffer_idx)
             is_weight = np.power(self.buffer_size * np.power(meta_idx,-self.alpha) / aprox_total, -self.beta)
