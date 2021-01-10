@@ -2,6 +2,8 @@
 import numpy as np
 import tensorflow as tf
 
+from itertools import chain
+
 class SARST_NStepReturn_RandomAccess_MemoryBuffer(object):
     def __init__(self, buffer_size, N, gamma, state_shape, action_shape, action_type = np.float32):
         self.states_memory = np.empty(shape=(buffer_size, *state_shape), dtype = np.float32)
@@ -41,10 +43,6 @@ class SARST_NStepReturn_RandomAccess_MemoryBuffer(object):
 
     def reset(self):
         self.memory_idx = 0
-
-    def is_buffer_ready(self):
-        upper_bound = self.memory_idx if self.memory_idx < self.buffer_size else self.buffer_size
-        return upper_bound >= self.N*2, upper_bound
 
     def get_tail_batch(self, transfer_len):
         upper_bound = self.memory_idx % self.buffer_size

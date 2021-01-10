@@ -4,7 +4,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>9e5b33f6-4bd8-4f6d-8f56-78c4ed632669</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>lunar_lander_ape-x.py</StartupFile>
+    <StartupFile>lunar_lander_a2c_tdn_buffer_with_entropy.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>

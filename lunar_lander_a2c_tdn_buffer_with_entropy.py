@@ -24,6 +24,7 @@ X_shape = (env.observation_space.shape[0])
 gamma = 0.99
 entropy_beta = 0.01
 N_return = 3
+batch_size = 16
 log_std_min=-20
 log_std_max=2
 
@@ -113,6 +114,7 @@ for i in range(num_episodes):
     episodic_reward = 0
     critic_loss_history = []
     actor_loss_history = []
+    exp_buffer.reset()
 
     while not done:
         actions_logits = actor(np.expand_dims(observation, axis = 0), training=False)
@@ -124,8 +126,8 @@ for i in range(num_episodes):
         
         exp_buffer.store(observation, chosen_action, next_observation, reward, float(done))
 
-        if exp_buffer.is_buffer_ready()[0] and epoch_steps % N_return == 0:
-            states, actions, next_states, rewards, gammas, dones = exp_buffer.get_last_batch() # batch_size = N, instead of random sampling use 'sliding window'
+        if (epoch_steps % (batch_size + N_return) == 0 and epoch_steps > 0) or done:
+            states, actions, next_states, rewards, gammas, dones = exp_buffer.get_tail_batch(batch_size)
             critic_loss, adv = train_critic(states, next_states, rewards, gammas, dones)
             critic_loss_history.append(critic_loss)
             actor_loss = train_actor(states, actions, adv)
