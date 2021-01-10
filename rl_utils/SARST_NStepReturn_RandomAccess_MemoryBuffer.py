@@ -62,8 +62,7 @@ class SARST_NStepReturn_RandomAccess_MemoryBuffer(object):
             tf.stack(self.next_states_memory[idxs]), \
             tf.stack(self.rewards_memory[idxs]), \
             tf.stack(self.gamma_power_memory[idxs]), \
-            tf.stack(self.dones_memory[idxs]), \
-            tf.stack(self.td_errors_memory[idxs])
+            tf.stack(self.dones_memory[idxs])
 
     def __call__(self, batch_size):
         upper_bound = (self.memory_idx - 1) if self.memory_idx < self.buffer_size else (self.buffer_size - 1)
