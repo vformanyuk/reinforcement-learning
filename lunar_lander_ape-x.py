@@ -9,9 +9,7 @@ from APEX.APEX_Rank_Priority_MemoryBuffer import APEX_Rank_Priority_MemoryBuffer
 from APEX.neural_networks import policy_network, critic_network
 from APEX.dpg_actor_slim import RunActor
 from APEX.dpg_learner import RunLearner
-#from APEX.neural_networks import q_network
-#from APEX.dqn_actor import RunActor
-#from APEX.dqn_learner import RunLearner
+
 from multiprocessing import Process, Pipe, Value
 from threading import Thread, Lock
 
@@ -33,7 +31,6 @@ if __name__ == '__main__':
                 if cmd[0] == 0:
                     with net_sync_obj:
                         actor_weight_pipes[cmd[1]][1].send([actor.get_weights(), critic.get_weights()])
-                        #actor_weight_pipes[cmd[1]][1].send([target_q.get_weights()])
                     orchestrator_log(f'Sent target weights for actor {cmd[1]}')
                     continue
                 if cmd[0] == 1:
@@ -99,9 +96,7 @@ if __name__ == '__main__':
 
     actor_learning_rate = 1e-4
     critic_learning_rate = 1e-3
-    #learning_rate = 3e-4
     gamma = 0.98
-    #epsilons = [0.2,0.7] #tf.clip_by_value(np.random.rand(), 0.1, 0.9)
 
     actors_count = 2
 
@@ -123,7 +118,6 @@ if __name__ == '__main__':
 
     critic_net = critic_network((env.observation_space.shape[0]), env.action_space.shape[0])
     policy_net = policy_network((env.observation_space.shape[0]), env.action_space.shape[0])
-    #target_Q = q_network((env.observation_space.shape[0]), env.action_space.n)
 
     cancelation_token = Value('i', 0)
     training_active_flag = Value('i', 0)
@@ -161,7 +155,6 @@ if __name__ == '__main__':
         weights_distribution_pipes.append((weights_read_pipe, weights_write_pipe))
         replay_data_read_pipe, replay_data_write_pipe = Pipe(False)
         replay_data_distribution_pipes.append((replay_data_read_pipe, replay_data_write_pipe))
-        # epsilones[i]
         p = Process(target=RunActor, args=(i, gamma, \
                                            actor_cmd_write_pipe, weights_read_pipe, replay_data_write_pipe, \
                                            cancelation_token, training_active_flag))
