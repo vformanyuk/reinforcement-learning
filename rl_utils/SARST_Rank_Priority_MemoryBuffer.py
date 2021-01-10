@@ -31,6 +31,8 @@ class SARST_Rank_Priority_MemoryBuffer(object):
         self.max_is_weight = 1
         self.ordered_storage = list()
         self.lookup = dict()
+        self.internal_ordering_counter = 0
+        self.internal_ordering_threshold = 500
 
     '''
     Calculate analogue of Euler–Mascheroni constant for chosen alpha
@@ -87,10 +89,16 @@ class SARST_Rank_Priority_MemoryBuffer(object):
         self.rewards_memory[write_idx] = reward
         self.dones_memory[write_idx] = is_terminal
         if self.memory_idx >= self.buffer_size:
-            self.ordered_storage.remove(self.lookup[write_idx]) # O(n)
-        container = rank_container(write_idx, self.td_max)
-        self.ordered_storage.append(container) #keep high error records in the end of array
-        self.lookup[write_idx] = container
+            self.lookup[write_idx].td_error = td_error
+            self.internal_ordering_counter += 1
+
+            if self.internal_ordering_counter > self.internal_ordering_threshold:
+                self.ordered_storage.sort()
+                self.internal_ordering_counter = 0
+        else:
+            container = rank_container(write_idx, self.td_max)
+            self.ordered_storage.append(container) #keep high error records in the end of array
+            self.lookup[write_idx] = container
         self.memory_idx += 1
 
     def update_priorities(self, meta_idxs, td_errors):
@@ -115,7 +123,7 @@ class SARST_Rank_Priority_MemoryBuffer(object):
         for k in range(self.batch_size):
             boundary = int(np.ceil(self.__get_sampling_interval_boundary(k, segment_len)))
             interval_end = (interval_start+1) if boundary <= interval_start else boundary
-            meta_idx = np.random.randint(low=storage_len - interval_end, high=storage_len - interval_start, size=1)[0] #reverse intervals because higher error records are in the end
+            meta_idx = np.random.randint(low=max(storage_len - interval_end, 0), high=storage_len - interval_start, size=1)[0] #reverse intervals because higher error records are in the end
             container = self.ordered_storage[meta_idx]
             idxs.append(container.replay_buffer_idx)
             is_weight = np.power(self.buffer_size * np.power(meta_idx,-self.alpha) / aprox_total, -self.beta)

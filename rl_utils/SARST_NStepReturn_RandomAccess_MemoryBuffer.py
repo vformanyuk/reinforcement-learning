@@ -46,23 +46,27 @@ class SARST_NStepReturn_RandomAccess_MemoryBuffer(object):
         upper_bound = self.memory_idx if self.memory_idx < self.buffer_size else self.buffer_size
         return upper_bound >= self.N*2, upper_bound
 
-    def get_last_batch(self):
-        is_full_enough, upper_bound = self.is_buffer_ready()
-        if not is_full_enough:
-            raise IndexError()
-
-        if self.dones_memory[upper_bound] < 1:
-            upper_bound -= self.N # last N records don't have full n-step return calculated, unless it is a terminal state.
-        idxs = range(upper_bound - self.N, upper_bound)
+    def get_tail_batch(self, transfer_len):
+        upper_bound = self.memory_idx % self.buffer_size
+        lower_bound = upper_bound - transfer_len
+        tail_interval = 0
+        if lower_bound < 0:
+            tail_interval = np.abs(lower_bound)
+            lower_bound = 0
+            
+        idxs = range(lower_bound, upper_bound)
+        if tail_interval > 0:
+            idxs = chain(idxs, range(self.buffer_size - tail_interval, self.buffer_size))
         return tf.stack(self.states_memory[idxs]), \
             tf.stack(self.actions_memory[idxs]), \
             tf.stack(self.next_states_memory[idxs]), \
             tf.stack(self.rewards_memory[idxs]), \
             tf.stack(self.gamma_power_memory[idxs]), \
-            tf.stack(self.dones_memory[idxs])
+            tf.stack(self.dones_memory[idxs]), \
+            tf.stack(self.td_errors_memory[idxs])
 
     def __call__(self, batch_size):
-        upper_bound = self.memory_idx if self.memory_idx < self.buffer_size else self.buffer_size
+        upper_bound = (self.memory_idx - 1) if self.memory_idx < self.buffer_size else (self.buffer_size - 1)
         if self.dones_memory[upper_bound] < 1:
             upper_bound -= self.N # last N records don't have full n-step return calculated, unless it is a terminal state.
         idxs = np.random.permutation(upper_bound)[:batch_size]
