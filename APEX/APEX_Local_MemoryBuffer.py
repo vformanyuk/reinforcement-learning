@@ -2,13 +2,16 @@
 import numpy as np
 import tensorflow as tf
 
-class SARST_NStepReturn_RandomAccess_MemoryBuffer(object):
+from itertools import chain
+
+class APEX_NStepReturn_MemoryBuffer(object):
     def __init__(self, buffer_size, N, gamma, state_shape, action_shape, action_type = np.float32):
         self.states_memory = np.empty(shape=(buffer_size, *state_shape), dtype = np.float32)
         self.next_states_memory = np.empty(shape=(buffer_size, *state_shape), dtype = np.float32)
         self.actions_memory = np.empty(shape=(buffer_size, *action_shape), dtype = action_type)
         self.rewards_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
         self.gamma_power_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
+        self.td_errors_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
         self.dones_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
         self.buffer_size = buffer_size
         self.memory_idx = 0
@@ -39,12 +42,11 @@ class SARST_NStepReturn_RandomAccess_MemoryBuffer(object):
             update_idx = (self.buffer_size + (write_idx - n_return_idx)) % self.buffer_size
         self.memory_idx += 1
 
+    def update_td_errors(self, idxs, td_errors):
+        self.td_errors_memory[idxs] = tf.math.abs(td_errors)
+
     def reset(self):
         self.memory_idx = 0
-
-    def is_buffer_ready(self):
-        upper_bound = self.memory_idx if self.memory_idx < self.buffer_size else self.buffer_size
-        return upper_bound >= self.N*2, upper_bound
 
     def get_tail_batch(self, transfer_len):
         upper_bound = self.memory_idx % self.buffer_size
@@ -62,16 +64,19 @@ class SARST_NStepReturn_RandomAccess_MemoryBuffer(object):
             tf.stack(self.next_states_memory[idxs]), \
             tf.stack(self.rewards_memory[idxs]), \
             tf.stack(self.gamma_power_memory[idxs]), \
-            tf.stack(self.dones_memory[idxs])
+            tf.stack(self.dones_memory[idxs]), \
+            tf.stack(self.td_errors_memory[idxs])
 
     def __call__(self, batch_size):
         upper_bound = (self.memory_idx - 1) if self.memory_idx < self.buffer_size else (self.buffer_size - 1)
-        if self.dones_memory[upper_bound] < 1:
-            upper_bound -= self.N # last N records don't have full n-step return calculated, unless it is a terminal state.
+
+        #if self.dones_memory[upper_bound] < 1:
+        #    upper_bound -= self.N # last N records don't have full n-step return calculated, unless it is a terminal state.
         idxs = np.random.permutation(upper_bound)[:batch_size]
         return tf.stack(self.states_memory[idxs]), \
             tf.stack(self.actions_memory[idxs]), \
             tf.stack(self.next_states_memory[idxs]), \
             tf.stack(self.rewards_memory[idxs]), \
             tf.stack(self.gamma_power_memory[idxs]), \
-            tf.stack(self.dones_memory[idxs])
+            tf.stack(self.dones_memory[idxs]), \
+            idxs

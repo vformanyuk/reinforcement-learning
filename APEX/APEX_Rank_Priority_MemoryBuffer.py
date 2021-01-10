@@ -13,12 +13,13 @@ class rank_container(object):
     def __eq__(self, value):
         return self.replay_buffer_idx == value.replay_buffer_idx
 
-class SARST_Rank_Priority_MemoryBuffer(object):
+class APEX_Rank_Priority_MemoryBuffer(object):
     def __init__(self, buffer_size, batch_size, state_shape, action_shape, action_type = np.float32, alpha=0.7, beta=0.5, beta_increase_rate=1.0001):
         self.states_memory = np.empty(shape=(buffer_size, *state_shape), dtype = np.float32)
         self.next_states_memory = np.empty(shape=(buffer_size, *state_shape), dtype = np.float32)
         self.actions_memory = np.empty(shape=(buffer_size, *action_shape), dtype = action_type)
         self.rewards_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
+        self.gamma_powers_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
         self.dones_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
         self.buffer_size = buffer_size
         self.batch_size = batch_size
@@ -27,7 +28,6 @@ class SARST_Rank_Priority_MemoryBuffer(object):
         self.beta = beta
         self.beta_inc_rate = beta_increase_rate
         self.gamma_s = self.__get_gamma_s()
-        self.td_max = 1
         self.max_is_weight = 1
         self.ordered_storage = list()
         self.lookup = dict()
@@ -38,7 +38,8 @@ class SARST_Rank_Priority_MemoryBuffer(object):
     Calculate analogue of Euler–Mascheroni constant for chosen alpha
     '''
     def __get_gamma_s(self):
-        pm_s = 1.01956 + 0.223632*self.alpha + 3.45985 * 1e-2 *(self.alpha**2) - 9.32331*1e-4*(self.alpha**2) - 1.40047*1e-5*(self.alpha**3) +7.63*1e-6*(self.alpha**4)
+        pm_s = 1.01956 + 0.223632*self.alpha + 3.45985 * 1e-2 *np.power(self.alpha,2) - 9.32331*1e-4*np.power(self.alpha,2) \
+               - 1.40047*1e-5*np.power(self.alpha,3) + 7.63*1e-6*np.power(self.alpha,4)
         return 2*np.arctan(pm_s)/np.pi # Calculate analogue of Euler–Mascheroni constant for chosen alpha
 
     '''
@@ -73,20 +74,21 @@ class SARST_Rank_Priority_MemoryBuffer(object):
     N=10**6
     K=128
     segment_len = aprox_total / batch_size
-    __get_threshold(0, a, l=segment_len)=72
-    __get_threshold(1, a, l=segment_len)=267
+    __get_sampling_interval_boundary(0, a, l=segment_len)=72
+    __get_sampling_interval_boundary(1, a, l=segment_len)=267
     ...
-    __get_threshold(K, a, l=segment_len)=999999
+    __get_sampling_interval_boundary(K, a, l=segment_len)=999999
     '''
     def __get_sampling_interval_boundary(self, interval_idx, interval_len):
         return np.exp(np.log((interval_len*interval_idx - self.gamma_s)*(1-self.alpha) + 1) / (1-self.alpha))
 
-    def store(self, state:tf.Tensor, action:tf.Tensor, next_state:tf.Tensor, reward:tf.Tensor, is_terminal:tf.Tensor):
+    def store(self, state:tf.Tensor, action:tf.Tensor, next_state:tf.Tensor, reward:tf.Tensor, gamma_power:tf.Tensor, is_terminal:tf.Tensor, td_error:tf.Tensor):
         write_idx = self.memory_idx % self.buffer_size
         self.states_memory[write_idx] = state
         self.next_states_memory[write_idx] = next_state
         self.actions_memory[write_idx] = action
         self.rewards_memory[write_idx] = reward
+        self.gamma_powers_memory[write_idx] = gamma_power
         self.dones_memory[write_idx] = is_terminal
         if self.memory_idx >= self.buffer_size:
             self.lookup[write_idx].td_error = td_error
@@ -96,8 +98,8 @@ class SARST_Rank_Priority_MemoryBuffer(object):
                 self.ordered_storage.sort()
                 self.internal_ordering_counter = 0
         else:
-            container = rank_container(write_idx, self.td_max)
-            self.ordered_storage.append(container) #keep high error records in the end of array
+            container = rank_container(write_idx, td_error)
+            bs.insort_right(self.ordered_storage, container) # O(logN) + O(n)
             self.lookup[write_idx] = container
         self.memory_idx += 1
 
@@ -106,10 +108,11 @@ class SARST_Rank_Priority_MemoryBuffer(object):
         # because indexes are fetched in reversed way, items are poped from the end and thus array indexes of preciding items are not affected
         for idx in meta_idxs:
             to_remove.append(self.ordered_storage.pop(idx))
-        for container, err in zip(to_remove, np.abs(td_errors)):
-            if err > self.td_max:
-                self.td_max = err
-            bs.insort_right(self.ordered_storage, rank_container(container.replay_buffer_idx, err)) # O(n)
+        for container, err in zip(to_remove, td_errors):
+            bs.insort_right(self.ordered_storage, rank_container(container.replay_buffer_idx, err)) # O(logN) + O(n)
+
+    def __len__(self):
+        return self.memory_idx
 
     def __call__(self):
         idxs = list()
@@ -142,6 +145,7 @@ class SARST_Rank_Priority_MemoryBuffer(object):
             tf.stack(self.actions_memory[idxs]), \
             tf.stack(self.next_states_memory[idxs]), \
             tf.stack(self.rewards_memory[idxs]), \
+            tf.stack(self.gamma_powers_memory[idxs]), \
             tf.stack(self.dones_memory[idxs]), \
             tf.convert_to_tensor(importance_sampling_weights / self.max_is_weight, dtype=tf.float32), \
-            meta_idxs #indexes are ordere indescending order due to reversed way of fetching
+            meta_idxs
