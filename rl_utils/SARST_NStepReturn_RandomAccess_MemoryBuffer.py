@@ -54,7 +54,7 @@ class SARST_NStepReturn_RandomAccess_MemoryBuffer(object):
             
         idxs = range(lower_bound, upper_bound)
         if tail_interval > 0:
-            idxs = chain(idxs, range(self.buffer_size - tail_interval, self.buffer_size))
+            idxs = list(chain(idxs, range(self.buffer_size - tail_interval, self.buffer_size)))
         return tf.stack(self.states_memory[idxs]), \
             tf.stack(self.actions_memory[idxs]), \
             tf.stack(self.next_states_memory[idxs]), \
