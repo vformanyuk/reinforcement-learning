@@ -85,13 +85,13 @@ class Actor(object):
         td_errors = self.get_td_errors(states, actions, next_states, rewards, gamma_powers, dones)
         self.send_replay_data(states, actions, next_states, rewards, gamma_powers, dones, td_errors)
 
-    @tf.function(experimental_relax_shapes=True)
+    @tf.function
     def get_actions(self, mu, log_sigma, noise=None):
         if noise is None:
             noise = self.gaus_distr.sample()
         return tf.math.tanh(mu + tf.math.exp(log_sigma) * noise)
 
-    @tf.function(experimental_relax_shapes=True)
+    @tf.function
     def get_log_probs(self, mu, sigma, actions):
         action_distributions = tfp.distributions.MultivariateNormalDiag(loc=mu, scale_diag=sigma)
         z = self.gaus_distr.sample()
@@ -100,7 +100,7 @@ class Actor(object):
                     tf.reduce_mean(tf.math.log(1 - tf.math.pow(actions, 2) + self.action_bounds_epsilon), axis=1)
         return log_probs
 
-    @tf.function(experimental_relax_shapes=True)
+    @tf.function
     def get_td_errors(self, states, actions, next_states, rewards, gamma_powers, dones):
         mu, log_sigma = self.actor(next_states, training=False)
         mu = tf.squeeze(mu)
@@ -123,14 +123,6 @@ class Actor(object):
         return tf.math.abs(target_q - tf.squeeze(min_q, axis=1))
 
     def run(self):
-        # this configuration must be done for every actor
-        #gpus = tf.config.experimental.list_physical_devices('GPU')
-        #try:
-        #    tf.config.experimental.set_memory_growth(gpus[0], True)
-        #    assert tf.config.experimental.get_memory_growth(gpus[0])
-        #except:
-        #    pass
-
         env = gym.make('LunarLanderContinuous-v2')
         self.actor = sac_policy_network((env.observation_space.shape[0]), env.action_space.shape[0])
         
@@ -156,7 +148,6 @@ class Actor(object):
             observation = env.reset()
 
             exp_buffer.reset()
-            #data_send_step = 0
 
             episodic_reward = 0
             epoch_steps = 0
@@ -173,7 +164,6 @@ class Actor(object):
 
                 if (epoch_steps % (self.data_send_steps + self.N) == 0 and epoch_steps > 0) or done:
                     self.__prepare_and_send_replay_data(exp_buffer, self.data_send_steps)
-                    #data_send_step+=1
 
                 if global_step % self.exchange_steps == 0 and self.training_active.value > 0: # update target networks every 'exchange_steps'
                     self.get_target_weights()
@@ -185,11 +175,6 @@ class Actor(object):
                 global_step+=1
                 epoch_steps+=1
                 episodic_reward += reward
-
-            # don't forget to send terminal states
-            #last_data_len = epoch_steps - data_send_step * (self.data_send_steps + self.N)
-            #if last_data_len > 0 and self.cancelation_token.value == 0:
-            #    self.__prepare_and_send_replay_data(exp_buffer, last_data_len)
 
             rewards_history.append(episodic_reward)
             last_mean = np.mean(rewards_history[-100:])
