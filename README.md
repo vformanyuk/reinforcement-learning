@@ -21,3 +21,7 @@ It is representative and doesn't skip frames like some other envs.
   * [Orchestrator](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_ape-x.py)
   * [DPG Actor](https://github.com/vformanyuk/reinforcement-learning/blob/master/APEX/dpg_actor_slim.py)
   * [DPG Learner](https://github.com/vformanyuk/reinforcement-learning/blob/master/APEX/dpg_learner.py)
+* APE-X with Soft Actor Critic
+  * [Orchestrator](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_ape-x-SAC.py)
+  * [SAC Actor](https://github.com/vformanyuk/reinforcement-learning/blob/master/APEX/sac_actor.py)
+  * [SAC Learner](https://github.com/vformanyuk/reinforcement-learning/blob/master/APEX/sac_learner.py)
