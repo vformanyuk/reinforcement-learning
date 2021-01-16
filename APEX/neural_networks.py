@@ -46,11 +46,32 @@ def critic_network(input_shape, outputs_count):
     model = keras.Model(inputs=[input, actions_input], outputs=q_layer)
     return model
 
-def q_network(input_shape, outputs_count):
+SAC_INITIALIZER_BOUNDS = 3e-3
+
+def sac_policy_network(input_shape, outputs_count):
     input = keras.layers.Input(shape=(input_shape))
     x = keras.layers.Dense(256, activation='relu')(input)
-    x = keras.layers.Dense(128, activation='relu')(x)
-    output = keras.layers.Dense(outputs_count, activation='linear')(x)
+    x = keras.layers.Dense(256, activation='relu')(x)
+    mean_output = keras.layers.Dense(outputs_count, activation='linear',
+                                kernel_initializer = keras.initializers.RandomUniform(minval=-SAC_INITIALIZER_BOUNDS, maxval=SAC_INITIALIZER_BOUNDS, seed=RND_SEED),
+                                bias_initializer = keras.initializers.RandomUniform(minval=-SAC_INITIALIZER_BOUNDS, maxval=SAC_INITIALIZER_BOUNDS, seed=RND_SEED))(x)
+    log_std_dev_output = keras.layers.Dense(outputs_count, activation='linear',
+                                kernel_initializer = keras.initializers.RandomUniform(minval=-SAC_INITIALIZER_BOUNDS, maxval=SAC_INITIALIZER_BOUNDS, seed=RND_SEED),
+                                bias_initializer = keras.initializers.RandomUniform(minval=-SAC_INITIALIZER_BOUNDS, maxval=SAC_INITIALIZER_BOUNDS, seed=RND_SEED))(x)
 
-    model = keras.Model(inputs=input, outputs=output)
+    model = keras.Model(inputs=input, outputs=[mean_output, log_std_dev_output])
+    return model
+
+def sac_critic_network(input_shape, outputs_count):
+    input = keras.layers.Input(shape=(input_shape))
+    actions_input = keras.layers.Input(shape=(outputs_count))
+
+    x = keras.layers.Concatenate()([input, actions_input])
+    x = keras.layers.Dense(256, activation='relu')(x)
+    x = keras.layers.Dense(256, activation='relu')(x)
+    q_layer = keras.layers.Dense(1, activation='linear',
+                                kernel_initializer = keras.initializers.RandomUniform(minval=-SAC_INITIALIZER_BOUNDS, maxval=SAC_INITIALIZER_BOUNDS, seed=RND_SEED),
+                                bias_initializer = keras.initializers.RandomUniform(minval=-SAC_INITIALIZER_BOUNDS, maxval=SAC_INITIALIZER_BOUNDS, seed=RND_SEED))(x)
+
+    model = keras.Model(inputs=[input, actions_input], outputs=q_layer)
     return model
