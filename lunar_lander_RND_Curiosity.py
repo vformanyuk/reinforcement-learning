@@ -28,8 +28,8 @@ log_std_max=2
 action_bounds_epsilon=1e-6
 target_entropy = -np.prod(env.action_space.shape)
 
-extrinsic_reward_coef = 1#2
-intrinsic_reward_coef = 1
+extrinsic_reward_coef = 1
+intrinsic_reward_coef = 20
 
 initializer_bounds = 3e-3
 
@@ -92,7 +92,7 @@ def predictor_network(state_space_shape):
 
     x = keras.layers.Dense(256, activation='relu')(input)
     x = keras.layers.Dense(128, activation='relu')(x)
-    embedding = keras.layers.Dense(state_space_shape, activation='linear',
+    embedding = keras.layers.Dense(1, activation='linear',
                                 kernel_initializer = keras.initializers.Orthogonal(np.sqrt(2)))(x)
 
     model = keras.Model(inputs=input, outputs=embedding)
@@ -179,16 +179,16 @@ def train_actor(states):
 @tf.function
 def get_intrinsic_rewards(states, cma, rv):
     std_dev = tf.math.sqrt(rv)
-    normalized_states = tf.clip_by_value(tf.math.divide((states - cma), std_dev), -5, 5) #shape (batch_size, state_space)
-    embedding = rnd_target(normalized_states, training=False) #shape (batch_size, state_space)
+    normalized_states = tf.clip_by_value(tf.math.divide((states - cma), std_dev), -5, 5)
+    embedding = rnd_target(normalized_states, training=False)
     with tf.GradientTape() as tape:
-        pred = predictor(normalized_states, training=True) #shape (batch_size, state_space)
+        pred = predictor(normalized_states, training=True)
         with tape.stop_recording():
-            intrinsic_rewards = tf.reduce_mean(tf.math.square(pred - embedding), axis=1) #shape (batch_size, state_space) => (batch_size)
+            intrinsic_rewards = tf.math.square(pred - embedding)
         loss = mse_loss(pred, embedding)
     gradients = tape.gradient(loss, predictor.trainable_variables)
     predictor_optimizer.apply_gradients(zip(gradients, predictor.trainable_variables))
-    return intrinsic_rewards
+    return tf.squeeze(intrinsic_rewards, axis=1)
 
 def soft_update_models():
     target_critic_1_weights = target_critic_1.get_weights()
