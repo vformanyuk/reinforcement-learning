@@ -29,7 +29,7 @@ action_bounds_epsilon=1e-6
 target_entropy = -np.prod(env.action_space.shape)
 
 extrinsic_reward_coef = 1
-intrinsic_reward_coef = 20
+intrinsic_reward_coef = 10
 
 initializer_bounds = 3e-3
 
@@ -90,10 +90,13 @@ def critic_network(state_space_shape, action_space_shape):
 def predictor_network(state_space_shape):
     input = keras.layers.Input(shape=(state_space_shape))
 
-    x = keras.layers.Dense(256, activation='relu')(input)
-    x = keras.layers.Dense(128, activation='relu')(x)
-    embedding = keras.layers.Dense(1, activation='linear',
-                                kernel_initializer = keras.initializers.Orthogonal(np.sqrt(2)))(x)
+    x = keras.layers.Dense(256, kernel_initializer = keras.initializers.Orthogonal(np.sqrt(2)),
+                           bias_initializer = keras.initializers.Zeros())(input)
+    x = keras.layers.LeakyReLU()(x)
+    x = keras.layers.Dense(128, kernel_initializer = keras.initializers.Orthogonal(np.sqrt(2)),
+                           bias_initializer = keras.initializers.Zeros())(x)
+    x = keras.layers.LeakyReLU()(x)
+    embedding = keras.layers.Dense(1, activation='linear')(x)
 
     model = keras.Model(inputs=input, outputs=embedding)
     return model
@@ -273,7 +276,7 @@ for i in range(num_episodes):
 
             states_std_dev = np.sqrt(states_mv / global_step)
 
-            int_rewards = get_intrinsic_rewards(states,
+            int_rewards = get_intrinsic_rewards(next_states,
                                                 tf.convert_to_tensor(states_cma, dtype=tf.float32),
                                                 tf.convert_to_tensor(states_std_dev, dtype=tf.float32))
             for ir in int_rewards:
@@ -309,7 +312,7 @@ for i in range(num_episodes):
 
     rewards_history.append(episodic_reward)
     last_mean = np.mean(rewards_history[-100:])
-    print(f'[epoch {i} ({epoch_steps})] Actor_Loss: {np.mean(actor_loss_history):.4f} Critic_Loss: {np.mean(critic_loss_history):.4f} Total reward: {episodic_reward} Total intrinsic reward: {episodic_intrinsic_reward} Mean(100)={last_mean:.4f}')
+    print(f'[epoch {i} ({epoch_steps})] Actor_Loss: {np.mean(actor_loss_history):.4f} Critic_Loss: {np.mean(critic_loss_history):.4f} Total reward: {episodic_reward:.4f} Avg reward: {episodic_reward/epoch_steps:.4f} Mean(100)={last_mean:.4f} Total intrinsic reward: {episodic_intrinsic_reward:.4f} Avg intrinsic reward: {episodic_intrinsic_reward/epoch_steps:.4f}')
     if last_mean > 200:
         break
 if last_mean > 200:
