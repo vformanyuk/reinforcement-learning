@@ -25,3 +25,4 @@ It is representative and doesn't skip frames like some other envs.
   * [Orchestrator](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_ape-x-SAC.py)
   * [SAC Actor](https://github.com/vformanyuk/reinforcement-learning/blob/master/APEX/sac_actor.py)
   * [SAC Learner](https://github.com/vformanyuk/reinforcement-learning/blob/master/APEX/sac_learner.py)
+* [Curiosity based on Random Network Distillation ( with Soft Actor Critic)](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_RND_Curiosity.py)
