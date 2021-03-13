@@ -97,6 +97,7 @@ def predictor_network(state_space_shape):
                            bias_initializer = keras.initializers.Zeros())(x)
     x = keras.layers.LeakyReLU()(x)
     embedding = keras.layers.Dense(1, activation='linear')(x)
+    #embedding = keras.layers.Dense(state_space_shape, activation='linear')(x)
 
     model = keras.Model(inputs=input, outputs=embedding)
     return model
@@ -187,11 +188,11 @@ def get_intrinsic_rewards(states, cma, rv):
     with tf.GradientTape() as tape:
         pred = predictor(normalized_states, training=True)
         with tape.stop_recording():
-            intrinsic_rewards = tf.math.square(pred - embedding)
+            intrinsic_rewards = tf.squeeze(tf.math.square(pred - embedding), axis=1) #tf.reduce_mean(tf.math.square(pred - embedding), axis=1)
         loss = mse_loss(pred, embedding)
     gradients = tape.gradient(loss, predictor.trainable_variables)
     predictor_optimizer.apply_gradients(zip(gradients, predictor.trainable_variables))
-    return tf.squeeze(intrinsic_rewards, axis=1)
+    return intrinsic_rewards
 
 def soft_update_models():
     target_critic_1_weights = target_critic_1.get_weights()
@@ -312,7 +313,7 @@ for i in range(num_episodes):
 
     rewards_history.append(episodic_reward)
     last_mean = np.mean(rewards_history[-100:])
-    print(f'[epoch {i} ({epoch_steps})] Actor_Loss: {np.mean(actor_loss_history):.4f} Critic_Loss: {np.mean(critic_loss_history):.4f} Total reward: {episodic_reward:.4f} Avg reward: {episodic_reward/epoch_steps:.4f} Mean(100)={last_mean:.4f} Total intrinsic reward: {episodic_intrinsic_reward:.4f} Avg intrinsic reward: {episodic_intrinsic_reward/epoch_steps:.4f}')
+    print(f'[epoch {i} ({epoch_steps})] Actor_Loss: {np.mean(actor_loss_history):.4f} Critic_Loss: {np.mean(critic_loss_history):.4f} TotalE: {episodic_reward:.4f} AvgE: {episodic_reward/epoch_steps:.4f} TotalI: {episodic_intrinsic_reward:.4f} AvgI: {episodic_intrinsic_reward/epoch_steps:.4f} Mean(100)={last_mean:.4f}')
     if last_mean > 200:
         break
 if last_mean > 200:
