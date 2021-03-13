@@ -181,8 +181,7 @@ def train_actor(states):
     return actor_loss
 
 @tf.function
-def get_intrinsic_rewards(states, cma, rv):
-    std_dev = tf.math.sqrt(rv)
+def get_intrinsic_rewards(states, cma, std_dev):
     normalized_states = tf.clip_by_value(tf.math.divide((states - cma), std_dev), -5, 5)
     embedding = rnd_target(normalized_states, training=False)
     with tf.GradientTape() as tape:
