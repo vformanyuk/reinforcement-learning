@@ -6,6 +6,10 @@ from tensorflow import keras
 import os
 from rl_utils.SARST_RandomAccess_MemoryBuffer import SARST_RandomAccess_MemoryBuffer
 
+# enable XLA
+#os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
+#os.environ['XLA_FLAGS'] = '--xla_gpu_cuda_data_dir="C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.3"'
+
 # prevent TensorFlow of allocating whole GPU memory
 gpus = tf.config.experimental.list_physical_devices('GPU')
 tf.config.experimental.set_memory_growth(gpus[0], True)
@@ -28,8 +32,12 @@ log_std_max=2
 action_bounds_epsilon=1e-6
 target_entropy = -np.prod(env.action_space.shape)
 
-extrinsic_reward_coef = 1
-intrinsic_reward_coef = 10
+states_mv_mask = tf.zeros((batch_size - 1, state_space_shape), dtype=tf.float32)
+intrinsic_rewards_mv_mask = tf.zeros((batch_size - 1,), dtype=tf.float32)
+
+extrinsic_reward_coef = tf.constant(1, dtype=tf.float32) #1
+intrinsic_reward_coef = tf.constant(10, dtype=tf.float32) #10
+actor_loss_coef = tf.constant(1, dtype=tf.float32) #1
 
 initializer_bounds = 3e-3
 
@@ -169,29 +177,48 @@ def train_actor(states):
         sigma = tf.math.exp(log_sigma)
         log_probs = get_log_probs(mu, sigma, target_actions)
 
-        actor_loss = tf.reduce_mean(alpha * log_probs - target_q)
+        actor_loss = tf.reduce_mean(alpha * log_probs - target_q) * actor_loss_coef
         
         with tf.GradientTape() as alpha_tape:
             alpha_loss = -tf.reduce_mean(alpha_log * tf.stop_gradient(log_probs + target_entropy))
         alpha_gradients = alpha_tape.gradient(alpha_loss, alpha_log)
         alpha_optimizer.apply_gradients([(alpha_gradients, alpha_log)])
-
     gradients = tape.gradient(actor_loss, actor.trainable_variables)
     actor_optimizer.apply_gradients(zip(gradients, actor.trainable_variables))
     return actor_loss
 
 @tf.function
-def get_intrinsic_rewards(states, cma, std_dev):
-    normalized_states = tf.clip_by_value(tf.math.divide((states - cma), std_dev), -5, 5)
+def get_combined_rewards(states, rewards, extrinsic_coef, intrinsic_coef, states_avg, states_mv, intrinsic_avg, intrinsic_mv, batch_index):
+    #states_cma += (observation - old_cma) / (global_step + 1)
+    states_mean = states_avg + (tf.reduce_mean(states, axis=0) - states_avg) / batch_index
+    
+    #states_mv += (observation - states_cma) * (observation - old_cma)
+    states_mv_masked = tf.concat([tf.expand_dims(states_mv, axis=0), states_mv_mask], axis=0)
+    states_var = tf.math.cumsum(states_mv_masked + (states - states_mean) * (states - states_avg), axis=0)[batch_size - 1]
+
+    states_std_dev = tf.math.sqrt(states_var / (batch_size * batch_index))
+    #states_std_dev = tf.math.reduce_std(states, axis=0)
+
+    normalized_states = tf.clip_by_value(tf.math.divide_no_nan((states - states_mean), states_std_dev), -5, 5)
     embedding = rnd_target(normalized_states, training=False)
     with tf.GradientTape() as tape:
         pred = predictor(normalized_states, training=True)
-        with tape.stop_recording():
-            intrinsic_rewards = tf.squeeze(tf.math.square(pred - embedding), axis=1) #tf.reduce_mean(tf.math.square(pred - embedding), axis=1)
-        loss = mse_loss(pred, embedding)
+        intrinsic_rewards = tf.squeeze(tf.math.square(pred - embedding), axis=1)
+        loss = tf.reduce_mean(intrinsic_rewards)
     gradients = tape.gradient(loss, predictor.trainable_variables)
     predictor_optimizer.apply_gradients(zip(gradients, predictor.trainable_variables))
-    return intrinsic_rewards
+
+    #intrinsic_reward_cma += (intrinsic_reward - old_ir_cma) / intrinsic_reward_counter
+    intrinsic_mean = intrinsic_avg + (tf.reduce_mean(intrinsic_rewards, axis=0) - intrinsic_avg) / batch_index
+    intrinsic_mv_masked = tf.concat([tf.expand_dims(intrinsic_mv, axis=0), intrinsic_rewards_mv_mask], axis=0)
+    #intrinsic_reward_mv += (intrinsic_reward - intrinsic_reward_cma) * (intrinsic_reward - old_ir_cma)
+    intrinsic_var = tf.math.cumsum(intrinsic_mv_masked + (intrinsic_rewards - intrinsic_mean) * (intrinsic_rewards - intrinsic_avg), axis=0)[batch_size - 1]
+    #ir_std_dev = np.sqrt(intrinsic_reward_mv / intrinsic_reward_counter)
+    intrinsic_std_dev = tf.math.sqrt(intrinsic_var / (batch_size * batch_index))
+
+    combined_rewards = tf.math.multiply(rewards, extrinsic_coef) + tf.math.multiply(tf.math.divide(intrinsic_rewards, intrinsic_std_dev), intrinsic_coef)
+
+    return combined_rewards, intrinsic_rewards, states_mean, states_var, intrinsic_mean, intrinsic_var
 
 def soft_update_models():
     target_critic_1_weights = target_critic_1.get_weights()
@@ -236,22 +263,22 @@ target_critic_2.set_weights(critic_2.get_weights())
 rnd_target = predictor_network(state_space_shape)
 predictor = predictor_network(state_space_shape)
 
-states_cma = np.full((state_space_shape,), 1e-6, dtype=np.float32) # moving avg
-states_mv = np.full((state_space_shape,), 1e-6, dtype=np.float32) # moving variance
-
-intrinsic_reward_cma = 0
-intrinsic_reward_mv = 0
-intrinsic_reward_counter = 0
-
 rewards_history = []
 global_step = 0
+
+states_avg = tf.zeros((state_space_shape,), dtype=tf.float32)
+states_var = tf.zeros((state_space_shape,), dtype=tf.float32)
+intrinsicR_avg = tf.convert_to_tensor(0., dtype=tf.float32)
+intrinsicR_var = tf.convert_to_tensor(0., dtype=tf.float32)
+batch_index = 0
 
 for i in range(num_episodes):
     done = False
     observation = env.reset()
 
     episodic_reward = 0
-    episodic_intrinsic_reward = 0
+    intrinsic_total = 0
+    intrinsic_count = 1
     epoch_steps = 0
     episodic_loss = []
     critic_loss_history = []
@@ -266,30 +293,19 @@ for i in range(num_episodes):
         next_observation, reward, done, _ = env.step([throttle_action, eng_ctrl_action])
 
         exp_buffer.store(observation, [throttle_action, eng_ctrl_action], next_observation, reward, float(done))
-        
-        old_cma = states_cma
-        states_cma += (observation - old_cma) / (global_step + 1)
-        states_mv += (observation - states_cma) * (observation - old_cma)
 
         if global_step > 4 * batch_size:
+            batch_index += 1
             states, actions, next_states, rewards, dones = exp_buffer(batch_size)
 
-            states_std_dev = np.sqrt(states_mv / global_step)
+            combined_rewards, intrinsic_rewards, states_avg, states_var, intrinsicR_avg, intrinsicR_var = get_combined_rewards(states, rewards, \
+                                                                                            extrinsic_reward_coef, intrinsic_reward_coef, \
+                                                                                            states_avg, states_var, 
+                                                                                            intrinsicR_avg, intrinsicR_var,
+                                                                                            tf.convert_to_tensor(batch_index, dtype=tf.float32))
 
-            int_rewards = get_intrinsic_rewards(next_states,
-                                                tf.convert_to_tensor(states_cma, dtype=tf.float32),
-                                                tf.convert_to_tensor(states_std_dev, dtype=tf.float32))
-            for ir in int_rewards:
-                intrinsic_reward_counter += 1
-                intrinsic_reward = ir.numpy()
-                episodic_intrinsic_reward += intrinsic_reward
-                old_ir_cma = intrinsic_reward_cma
-                intrinsic_reward_cma += (intrinsic_reward - old_ir_cma) / intrinsic_reward_counter
-                intrinsic_reward_mv += (intrinsic_reward - intrinsic_reward_cma) * (intrinsic_reward - old_ir_cma)
-
-            ir_std_dev = np.sqrt(intrinsic_reward_mv / intrinsic_reward_counter)
-
-            combined_rewards = extrinsic_reward_coef * rewards + intrinsic_reward_coef * (int_rewards/ir_std_dev)
+            intrinsic_total += tf.math.reduce_sum(intrinsic_rewards)
+            intrinsic_count += batch_size #len(intrinsic_rewards)
 
             for _ in range(gradient_step):
                 critic1_loss, critic2_loss = train_critics(states, actions, next_states, combined_rewards, dones)
@@ -312,7 +328,7 @@ for i in range(num_episodes):
 
     rewards_history.append(episodic_reward)
     last_mean = np.mean(rewards_history[-100:])
-    print(f'[epoch {i} ({epoch_steps})] Actor_Loss: {np.mean(actor_loss_history):.4f} Critic_Loss: {np.mean(critic_loss_history):.4f} TotalE: {episodic_reward:.4f} AvgE: {episodic_reward/epoch_steps:.4f} TotalI: {episodic_intrinsic_reward:.4f} AvgI: {episodic_intrinsic_reward/epoch_steps:.4f} Mean(100)={last_mean:.4f}')
+    print(f'[epoch {i} ({epoch_steps})] Actor_Loss: {np.mean(actor_loss_history):.4f} Critic_Loss: {np.mean(critic_loss_history):.4f} TotalE: {episodic_reward:.4f} AvgE: {episodic_reward/epoch_steps:.4f} TotalI: {intrinsic_total:.4f} AvgI: {intrinsic_total/intrinsic_count:.4f} Mean(100)={last_mean:.4f}')
     if last_mean > 200:
         break
 if last_mean > 200:
