@@ -4,14 +4,16 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 from tensorflow import keras
 import os
-from rl_utils.SARST_RandomAccess_MemoryBuffer import SARST_RandomAccess_MemoryBuffer
+from rl_utils.SAR_RNN_MemoryBuffer import SAR_NStepReturn_RandomAccess_MemoryBuffer
 
 # prevent TensorFlow of allocating whole GPU memory
 gpus = tf.config.experimental.list_physical_devices('GPU')
 tf.config.experimental.set_memory_growth(gpus[0], True)
 
+stack_size = 4
+
 env = gym.make('LunarLanderContinuous-v2')
-X_shape = (env.observation_space.shape[0])
+state_space_shape = (stack_size, env.observation_space.shape[0])
 outputs_count = env.action_space.shape[0]
 
 batch_size = 100
@@ -20,7 +22,7 @@ actor_learning_rate = 3e-4
 critic_learning_rate = 3e-4
 alpha_learning_rate = 3e-4
 gamma = 0.99
-tau = 0.005
+tau = 0.05
 gradient_step = 1
 log_std_min=-20
 log_std_max=2
@@ -34,10 +36,6 @@ RND_SEED = 0x12345
 checkpoint_step = 500
 max_epoch_steps = 1000
 global_step = 0
-
-actor_checkpoint_file_name = 'll_rnn_actor_checkpoint.h5'
-critic_1_checkpoint_file_name = 'll_rnn_critic1_checkpoint.h5'
-critic_2_checkpoint_file_name = 'll_rnn_critic2_checkpoint.h5'
 
 actor_optimizer = tf.keras.optimizers.Adam(actor_learning_rate)
 critic_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
@@ -53,10 +51,10 @@ np.random.random(RND_SEED)
 
 exp_buffer_capacity = 1000000
 
-exp_buffer = SARST_RandomAccess_MemoryBuffer(exp_buffer_capacity, env.observation_space.shape, env.action_space.shape)
+exp_buffer = SAR_NStepReturn_RandomAccess_MemoryBuffer(exp_buffer_capacity, 4, 0.99, state_space_shape, env.action_space.shape)
 
 def policy_network():
-    input = keras.layers.Input(shape=(X_shape))
+    input = keras.layers.Input(shape=(state_space_shape))
 
     x = keras.layers.LSTM(256)(input)
     x = keras.layers.Dense(256, activation='relu')(x)
@@ -72,7 +70,7 @@ def policy_network():
     return model
 
 def critic_network():
-    input = keras.layers.Input(shape=(X_shape))
+    input = keras.layers.Input(shape=(state_space_shape))
     actions_input = keras.layers.Input(shape=(outputs_count))
 
     x = keras.layers.LSTM(256)(input)
@@ -87,27 +85,19 @@ def critic_network():
     model = keras.Model(inputs=[input, actions_input], outputs=q_layer)
     return model
 
-'''
-SAC uses action reparametrization to avoid expectation over action.
-So action is represented by squashed (tanh in this case) Normal distribution
-'''
-@tf.function
-def get_actions(mu, log_sigma, noise=None):
-    if noise is None:
-        noise = gaus_distr.sample()
-    return tf.math.tanh(mu + tf.math.exp(log_sigma) * noise)
+@tf.function(experimental_relax_shapes=True)
+def get_actions(mu, log_sigma):
+    return tf.math.tanh(mu + tf.math.exp(log_sigma) * gaus_distr.sample())
 
-@tf.function
+@tf.function(experimental_relax_shapes=True)
 def get_log_probs(mu, sigma, actions):
     action_distributions = tfp.distributions.MultivariateNormalDiag(loc=mu, scale_diag=sigma)
-    z = gaus_distr.sample()
-    # appendix C of the SAC paper discribe applyed boundings which is log(1-tanh(u)^2)
-    log_probs = action_distributions.log_prob(mu + sigma*z) - \
+    log_probs = action_distributions.log_prob(mu + sigma * gaus_distr.sample()) - \
                 tf.reduce_mean(tf.math.log(1 - tf.math.pow(actions, 2) + action_bounds_epsilon), axis=1)
     return log_probs
 
-@tf.function
-def train_critics(states, actions, next_states, rewards, dones):
+@tf.function(experimental_relax_shapes=True)
+def train_critics(states, actions, next_states, rewards, gamma_powers, dones):
     mu, log_sigma = actor(next_states)
     mu = tf.squeeze(mu)
     log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), log_std_min, log_std_max)
@@ -122,7 +112,7 @@ def train_critics(states, actions, next_states, rewards, dones):
     log_probs = get_log_probs(mu, sigma, target_actions)
     next_values = min_q - tf.math.exp(alpha_log) * log_probs # min(Q1^,Q2^) - alpha * logPi
 
-    target_q = rewards + gamma * (1 - dones) * next_values
+    target_q = rewards + tf.pow(gamma, gamma_powers) * (1 - dones) * next_values
 
     with tf.GradientTape() as tape:
         current_q = critic_1([states, actions], training=True)
@@ -137,7 +127,7 @@ def train_critics(states, actions, next_states, rewards, dones):
     critic_optimizer.apply_gradients(zip(gradients, critic_2.trainable_variables))
     return c1_loss, c2_loss
 
-@tf.function
+@tf.function(experimental_relax_shapes=True)
 def train_actor(states):
     alpha = tf.math.exp(alpha_log)
     with tf.GradientTape() as tape:
@@ -180,28 +170,32 @@ def soft_update_models():
         updated_critic_2_weights.append(tau * cw + (1.0 - tau) * tcw)
     target_critic_2.set_weights(updated_critic_2_weights)
 
-if os.path.isfile(actor_checkpoint_file_name):
-    actor = keras.models.load_model(actor_checkpoint_file_name)
-    print("Model restored from checkpoint.")
-else:
-    actor = policy_network()
-    print("New model created.")
+def actor_burn_in(states, hidden_states):
+    pass # set hidden state, feed forward (state), repeat for whole burn-in trajectory
 
-if os.path.isfile(critic_1_checkpoint_file_name):
-    critic_1 = keras.models.load_model(critic_1_checkpoint_file_name)
-    print("Critic model restored from checkpoint.")
-else:
-    critic_1 = critic_network()
-    print("New Critic model created.")
+def critics_burn_in(states, actions, hidden_states):
+    pass # set hidden state, feed forward (state;action), repeat for whole burn-in trajectory
+
+def __step(action, stack_size = 4, mean_reward = True):
+    next_state=[]
+    reward=[]
+    done = False
+    for _ in range(stack_size):
+        ns, r, d, _ = env.step(action)
+        next_state.append(ns)
+        reward.append(r)
+        done = d
+        if done:
+            break
+    return next_state, np.mean(reward) if mean_reward else r, done
+
+actor = policy_network()
+
+critic_1 = critic_network()
 target_critic_1 = critic_network()
 target_critic_1.set_weights(critic_1.get_weights())
 
-if os.path.isfile(critic_2_checkpoint_file_name):
-    critic_2 = keras.models.load_model(critic_2_checkpoint_file_name)
-    print("Critic model restored from checkpoint.")
-else:
-    critic_2 = critic_network()
-    print("New Critic model created.")
+critic_2 = critic_network()
 target_critic_2 = critic_network()
 target_critic_2.set_weights(critic_2.get_weights())
 
@@ -209,7 +203,10 @@ rewards_history = []
 
 for i in range(num_episodes):
     done = False
-    observation = env.reset()
+    state0 = env.reset()
+    observation = []
+    for _ in range(stack_size):
+        observation.append(state0)
 
     episodic_reward = 0
     epoch_steps = 0
@@ -223,38 +220,33 @@ for i in range(num_episodes):
         throttle_action = get_actions(mean[0][0], log_std_dev[0][0])
         eng_ctrl_action = get_actions(mean[0][1], log_std_dev[0][1])
 
-        next_observation, reward, done, _ = env.step([throttle_action, eng_ctrl_action])
+        next_observation, reward, done = __step([throttle_action, eng_ctrl_action])
 
-        exp_buffer.store(observation, [throttle_action, eng_ctrl_action], next_observation, reward, float(done))
+        exp_buffer.store(None, None, observation, [throttle_action, eng_ctrl_action], reward, float(done))
 
-        if global_step > 10 * batch_size:
-            states, actions, next_states, rewards, dones = exp_buffer(batch_size)
-
-            for _ in range(gradient_step):
-                critic1_loss, critic2_loss = train_critics(states, actions, next_states, rewards, dones)
-                critic_loss_history.append(critic1_loss)
-                critic_loss_history.append(critic2_loss)
-            
-                actor_loss = train_actor(states)
-                actor_loss_history.append(actor_loss)
-            soft_update_models()
+        if global_step > 4 * batch_size:
+            # get one trajectory at a time
+            for actor_h, critic_h, burn_in_states, burn_in_actions, states, actions, next_states, rewards, gamma_powers, dones in exp_buffer(batch_size):
+                actor_burn_in(burn_in_states, actor_h)
+                critics_burn_in(burn_in_states, burn_in_actions, critic_h)
+                for _ in range(gradient_step):
+                    critic1_loss, critic2_loss = train_critics(states, actions, next_states, rewards, gamma_powers, dones)
+                    critic_loss_history.append(critic1_loss)
+                    critic_loss_history.append(critic2_loss)
+                
+                    actor_loss = train_actor(states)
+                    actor_loss_history.append(actor_loss)
+                soft_update_models()
 
         observation = next_observation
         global_step+=1
         epoch_steps+=1
         episodic_reward += reward
 
-    if i % checkpoint_step == 0 and i > 0:
-        actor.save(actor_checkpoint_file_name)
-        critic_1.save(critic_1_checkpoint_file_name)
-        critic_2.save(critic_2_checkpoint_file_name)
-
     rewards_history.append(episodic_reward)
     last_mean = np.mean(rewards_history[-100:])
     print(f'[epoch {i} ({epoch_steps})] Actor_Loss: {np.mean(actor_loss_history):.4f} Critic_Loss: {np.mean(critic_loss_history):.4f} Total reward: {episodic_reward} Mean(100)={last_mean:.4f}')
     if last_mean > 200:
         break
-if last_mean > 200:
-    actor.save('lunar_lander_sac.h5')
 env.close()
 input("training complete...")

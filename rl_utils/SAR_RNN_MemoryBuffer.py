@@ -6,7 +6,7 @@ from itertools import chain
 
 class SAR_NStepReturn_RandomAccess_MemoryBuffer(object):
     def __init__(self, buffer_size, N, gamma, state_shape, action_shape, reward_shape=None, action_type = np.float32, \
-                trajectory_size=80, trajectory_overlap=40, burn_in_length=40):
+                trajectory_size=80, trajectory_overlap=40, burn_in_length=10):
         self._trajectory_size = trajectory_size
         self._trajectory_overlap = trajectory_overlap
         self._burn_in_len = burn_in_length
@@ -60,6 +60,7 @@ class SAR_NStepReturn_RandomAccess_MemoryBuffer(object):
             self.current_trajectory.append(write_idx)
 
         if len(self.current_trajectory) == self._trajectory_size or is_terminal > 0.5: # trajectory shouldn't overlap episode
+            # zero length trajectories are problem
             self.trajectory_store.append(np.array(self.current_trajectory[:], dtype=np.int)) # trajectory length is less then expected
             self.current_trajectory = self.overlapping_trajectory[:]
             self.overlapping_trajectory = []
@@ -98,14 +99,14 @@ class SAR_NStepReturn_RandomAccess_MemoryBuffer(object):
         idxs = np.random.permutation(len(self.trajectory_store))[:batch_size]
         for idx in idxs:
             # first state in trajectory is taken from burn-in period
-            states = self.states_memory[self.trajectory_store[idx][:-1]]
-            next_states = self.states_memory[self.trajectory_store[idx][1:]]
+            states_idxs = self.trajectory_store[idx][:-1]
+            trajectory_idxs = self.trajectory_store[idx][1:]
             yield self.actor_hidden_states_memory[idx], self.critic_hidden_states_memory[idx], \
                     tf.stack(self.states_memory[self.burn_in_store[idx]]), \
                     tf.stack(self.actions_memory[self.burn_in_store[idx]]), \
-                    tf.stack(states), \
-                    tf.stack(self.actions_memory[self.trajectory_store[idx]]), \
-                    tf.stack(next_states), \
-                    tf.stack(self.rewards_memory[self.trajectory_store[idx]]), \
-                    tf.stack(self.gamma_power_memory[self.trajectory_store[idx]]), \
-                    tf.stack(self.dones_memory[self.trajectory_store[idx]])
+                    tf.stack(self.states_memory[states_idxs]), \
+                    tf.stack(self.actions_memory[trajectory_idxs]), \
+                    tf.stack(self.states_memory[trajectory_idxs]), \
+                    tf.stack(self.rewards_memory[trajectory_idxs]), \
+                    tf.stack(self.gamma_power_memory[trajectory_idxs]), \
+                    tf.stack(self.dones_memory[trajectory_idxs])
