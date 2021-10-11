@@ -1,9 +1,9 @@
 import gym
 import numpy as np
 import tensorflow as tf
+from tensorflow.python.ops.gen_array_ops import shape
 import tensorflow_probability as tfp
 from tensorflow import keras
-import os
 from rl_utils.SAR_RNN_MemoryBuffer import SAR_NStepReturn_RandomAccess_MemoryBuffer
 
 # prevent TensorFlow of allocating whole GPU memory
@@ -12,18 +12,21 @@ tf.config.experimental.set_memory_growth(gpus[0], True)
 
 stack_size = 4
 
+actor_recurrent_layer_size = 256
+critic_recurrent_layer_size = 256
+
 env = gym.make('LunarLanderContinuous-v2')
 state_space_shape = (stack_size, env.observation_space.shape[0])
 outputs_count = env.action_space.shape[0]
 
-batch_size = 100
+batch_size = 128
 num_episodes = 5000
 actor_learning_rate = 3e-4
 critic_learning_rate = 3e-4
 alpha_learning_rate = 3e-4
 gamma = 0.99
-tau = 0.05
-gradient_step = 1
+tau = 0.005
+gradient_step = 3
 log_std_min=-20
 log_std_max=2
 action_bounds_epsilon=1e-6
@@ -51,14 +54,16 @@ np.random.random(RND_SEED)
 
 exp_buffer_capacity = 1000000
 
-exp_buffer = SAR_NStepReturn_RandomAccess_MemoryBuffer(exp_buffer_capacity, 4, 0.99, state_space_shape, env.action_space.shape)
+exp_buffer = SAR_NStepReturn_RandomAccess_MemoryBuffer(exp_buffer_capacity, 4, 0.99, state_space_shape, env.action_space.shape, 
+                                                        trajectory_size=40, trajectory_overlap=20, burn_in_length=10)
 
 def policy_network():
     input = keras.layers.Input(shape=(state_space_shape))
+    hidden_input = keras.layers.Input(shape=(actor_recurrent_layer_size))
 
-    x = keras.layers.LSTM(256)(input)
-    x = keras.layers.Dense(256, activation='relu')(x)
-    x = keras.layers.Dense(128, activation='relu')(x)
+    rnn_out, hx = keras.layers.GRU(actor_recurrent_layer_size, return_state=True)(input, initial_state=[hidden_input])
+    x = keras.layers.Dense(128, activation='relu')(rnn_out)
+    x = keras.layers.Dense(64, activation='relu')(x)
     mean_output = keras.layers.Dense(outputs_count, activation='linear',
                                 kernel_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED),
                                 bias_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED))(x)
@@ -66,16 +71,18 @@ def policy_network():
                                 kernel_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED),
                                 bias_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED))(x)
 
-    model = keras.Model(inputs=input, outputs=[mean_output, log_std_dev_output])
+    model = keras.Model(inputs=[input, hidden_input], outputs=[mean_output, log_std_dev_output, hx, rnn_out])
     return model
 
 def critic_network():
-    input = keras.layers.Input(shape=(state_space_shape))
+    # instead of RNN layers and rolling out burn-in trajectory try to reuse output of actor's RNN layer
+    # in some sense, RNN layer is common
+    input = keras.layers.Input(shape=(actor_recurrent_layer_size))
     actions_input = keras.layers.Input(shape=(outputs_count))
 
-    x = keras.layers.LSTM(256)(input)
-    x = keras.layers.Concatenate()([x, actions_input])
+    x = keras.layers.Concatenate()([input, actions_input])
 
+    x = keras.layers.Dense(256, activation='relu')(x)
     x = keras.layers.Dense(256, activation='relu')(x)
     x = keras.layers.Dense(128, activation='relu')(x)
     q_layer = keras.layers.Dense(1, activation='linear',
@@ -97,48 +104,49 @@ def get_log_probs(mu, sigma, actions):
     return log_probs
 
 @tf.function(experimental_relax_shapes=True)
-def train_critics(states, actions, next_states, rewards, gamma_powers, dones):
-    mu, log_sigma = actor(next_states)
+def train_critics(actor_hx, states, actions, next_states, rewards, gamma_powers, dones):
+    _, __, ___, rnn_flat_states = actor([states, actor_hx], training=False)
+    mu, log_sigma, ___, rnn_flat_next_states = actor([next_states, actor_hx], training=False)
     mu = tf.squeeze(mu)
     log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), log_std_min, log_std_max)
 
     target_actions = get_actions(mu, log_sigma)
 
-    min_q = tf.math.minimum(target_critic_1([next_states, target_actions], training=False), \
-                            target_critic_2([next_states, target_actions], training=False))
+    min_q = tf.math.minimum(target_critic_1([rnn_flat_next_states, target_actions], training=False), \
+                            target_critic_2([rnn_flat_next_states, target_actions], training=False))
     min_q = tf.squeeze(min_q, axis=1)
 
     sigma = tf.math.exp(log_sigma)
     log_probs = get_log_probs(mu, sigma, target_actions)
-    next_values = min_q - tf.math.exp(alpha_log) * log_probs # min(Q1^,Q2^) - alpha * logPi
+    next_values = min_q - tf.math.exp(alpha_log) * log_probs
 
     target_q = rewards + tf.pow(gamma, gamma_powers) * (1 - dones) * next_values
 
     with tf.GradientTape() as tape:
-        current_q = critic_1([states, actions], training=True)
+        current_q = critic_1([rnn_flat_states, actions], training=True)
         c1_loss = mse_loss(current_q, target_q)
     gradients = tape.gradient(c1_loss, critic_1.trainable_variables)
     critic_optimizer.apply_gradients(zip(gradients, critic_1.trainable_variables))
 
     with tf.GradientTape() as tape:
-        current_q = critic_2([states, actions], training=True)
+        current_q = critic_2([rnn_flat_states, actions], training=True)
         c2_loss = mse_loss(current_q, target_q)
     gradients = tape.gradient(c2_loss, critic_2.trainable_variables)
     critic_optimizer.apply_gradients(zip(gradients, critic_2.trainable_variables))
     return c1_loss, c2_loss
 
 @tf.function(experimental_relax_shapes=True)
-def train_actor(states):
+def train_actor(states, hidden_rnn_states):
     alpha = tf.math.exp(alpha_log)
     with tf.GradientTape() as tape:
-        mu, log_sigma = actor(states, training=True)
+        mu, log_sigma, ___, rnn_flat_states = actor([states, hidden_rnn_states], training=True)
         mu = tf.squeeze(mu)
         log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), log_std_min, log_std_max)
 
         target_actions = get_actions(mu, log_sigma)
         
-        target_q = tf.math.minimum(critic_1([states, target_actions], training=False), \
-                                   critic_2([states, target_actions], training=False))
+        target_q = tf.math.minimum(critic_1([rnn_flat_states, target_actions], training=False), \
+                                   critic_2([rnn_flat_states, target_actions], training=False))
         target_q = tf.squeeze(target_q, axis=1)
         
         sigma = tf.math.exp(log_sigma)
@@ -170,24 +178,28 @@ def soft_update_models():
         updated_critic_2_weights.append(tau * cw + (1.0 - tau) * tcw)
     target_critic_2.set_weights(updated_critic_2_weights)
 
-def actor_burn_in(states, hidden_states):
-    pass # set hidden state, feed forward (state), repeat for whole burn-in trajectory
+def actor_burn_in(states, hx0, trajectory_length):
+    hx = hx0
+    for s in states:
+        _, __, hx, ____ = actor([np.expand_dims(s, axis = 0), hx], training=False)
+    return tf.tile(hx, [trajectory_length, 1])
 
-def critics_burn_in(states, actions, hidden_states):
-    pass # set hidden state, feed forward (state;action), repeat for whole burn-in trajectory
-
-def __step(action, stack_size = 4, mean_reward = True):
-    next_state=[]
-    reward=[]
-    done = False
-    for _ in range(stack_size):
-        ns, r, d, _ = env.step(action)
-        next_state.append(ns)
-        reward.append(r)
-        done = d
-        if done:
-            break
-    return next_state, np.mean(reward) if mean_reward else r, done
+def __interpolation_step(s0, action, stack_size=4):
+    result_states = []
+    sN, r, d, _ = env.step(action)
+    #interpolate between s0 and sN
+    xp = [0, stack_size - 1]
+    x = [i for i in range(stack_size) if i not in xp]
+    interp_count = stack_size - 2
+    result_states.append(s0)
+    for _ in range(interp_count):
+        result_states.append(np.zeros(shape=(len(s0)),dtype=np.float))
+    result_states.append(sN)
+    for i , y_boundary in enumerate(zip(s0, sN)):
+        y_linear = np.interp(x, xp, y_boundary)
+        for j, y in enumerate(y_linear):
+            result_states[j+1][i] = y
+    return result_states, r, d
 
 actor = policy_network()
 
@@ -214,27 +226,29 @@ for i in range(num_episodes):
     critic_loss_history = []
     actor_loss_history = []
 
+    actor_hx = tf.zeros(shape=(1, actor_recurrent_layer_size), dtype=tf.float32)
+
     while not done:
         #env.render()
-        mean, log_std_dev = actor(np.expand_dims(observation, axis = 0), training=False)
+        mean, log_std_dev, actor_hx, __ = actor([np.expand_dims(observation, axis = 0), actor_hx], training=False)
         throttle_action = get_actions(mean[0][0], log_std_dev[0][0])
         eng_ctrl_action = get_actions(mean[0][1], log_std_dev[0][1])
 
-        next_observation, reward, done = __step([throttle_action, eng_ctrl_action])
+        next_observation, reward, done = __interpolation_step(state0, [throttle_action, eng_ctrl_action])
+        state0 = next_observation[-1:][0]
 
-        exp_buffer.store(None, None, observation, [throttle_action, eng_ctrl_action], reward, float(done))
+        exp_buffer.store(actor_hx, observation, [throttle_action, eng_ctrl_action], reward, float(done))
 
         if global_step > 4 * batch_size:
             # get one trajectory at a time
-            for actor_h, critic_h, burn_in_states, burn_in_actions, states, actions, next_states, rewards, gamma_powers, dones in exp_buffer(batch_size):
-                actor_burn_in(burn_in_states, actor_h)
-                critics_burn_in(burn_in_states, burn_in_actions, critic_h)
+            for actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones in exp_buffer(batch_size):
+                actor_training_hx = actor_burn_in(burn_in_states, actor_h, len(rewards))
                 for _ in range(gradient_step):
-                    critic1_loss, critic2_loss = train_critics(states, actions, next_states, rewards, gamma_powers, dones)
+                    critic1_loss, critic2_loss = train_critics(actor_training_hx, states, actions, next_states, rewards, gamma_powers, dones)
                     critic_loss_history.append(critic1_loss)
                     critic_loss_history.append(critic2_loss)
                 
-                    actor_loss = train_actor(states)
+                    actor_loss = train_actor(states, actor_training_hx)
                     actor_loss_history.append(actor_loss)
                 soft_update_models()
 
