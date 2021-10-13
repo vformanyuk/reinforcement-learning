@@ -11,6 +11,7 @@ gpus = tf.config.experimental.list_physical_devices('GPU')
 tf.config.experimental.set_memory_growth(gpus[0], True)
 
 stack_size = 4
+burn_in_length = 10
 
 actor_recurrent_layer_size = 256
 critic_recurrent_layer_size = 256
@@ -55,7 +56,7 @@ np.random.random(RND_SEED)
 exp_buffer_capacity = 1000000
 
 exp_buffer = SAR_NStepReturn_RandomAccess_MemoryBuffer(exp_buffer_capacity, 4, 0.99, state_space_shape, env.action_space.shape, 
-                                                        trajectory_size=40, trajectory_overlap=20, burn_in_length=10)
+                                                        trajectory_size=40, trajectory_overlap=20, burn_in_length=burn_in_length)
 
 def policy_network():
     input = keras.layers.Input(shape=(state_space_shape))
@@ -71,18 +72,18 @@ def policy_network():
                                 kernel_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED),
                                 bias_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED))(x)
 
-    model = keras.Model(inputs=[input, hidden_input], outputs=[mean_output, log_std_dev_output, hx, rnn_out])
+    model = keras.Model(inputs=[input, hidden_input], outputs=[mean_output, log_std_dev_output, hx])
     return model
 
 def critic_network():
-    # instead of RNN layers and rolling out burn-in trajectory try to reuse output of actor's RNN layer
-    # in some sense, RNN layer is common
-    input = keras.layers.Input(shape=(actor_recurrent_layer_size))
+    input = keras.layers.Input(shape=(state_space_shape))
     actions_input = keras.layers.Input(shape=(outputs_count))
 
-    x = keras.layers.Concatenate()([input, actions_input])
+    x = keras.layers.GRU(actor_recurrent_layer_size)(input)
+    # x = keras.layers.Flatten()(input)
+    # x = keras.layers.Dense(actor_recurrent_layer_size)(x)
+    x = keras.layers.Concatenate()([x, actions_input])
 
-    x = keras.layers.Dense(256, activation='relu')(x)
     x = keras.layers.Dense(256, activation='relu')(x)
     x = keras.layers.Dense(128, activation='relu')(x)
     q_layer = keras.layers.Dense(1, activation='linear',
@@ -105,15 +106,14 @@ def get_log_probs(mu, sigma, actions):
 
 @tf.function(experimental_relax_shapes=True)
 def train_critics(actor_hx, states, actions, next_states, rewards, gamma_powers, dones):
-    _, __, ___, rnn_flat_states = actor([states, actor_hx], training=False)
-    mu, log_sigma, ___, rnn_flat_next_states = actor([next_states, actor_hx], training=False)
+    mu, log_sigma, ___ = actor([next_states, actor_hx], training=False)
     mu = tf.squeeze(mu)
     log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), log_std_min, log_std_max)
 
     target_actions = get_actions(mu, log_sigma)
 
-    min_q = tf.math.minimum(target_critic_1([rnn_flat_next_states, target_actions], training=False), \
-                            target_critic_2([rnn_flat_next_states, target_actions], training=False))
+    min_q = tf.math.minimum(target_critic_1([next_states, target_actions], training=False), \
+                            target_critic_2([next_states, target_actions], training=False))
     min_q = tf.squeeze(min_q, axis=1)
 
     sigma = tf.math.exp(log_sigma)
@@ -123,13 +123,13 @@ def train_critics(actor_hx, states, actions, next_states, rewards, gamma_powers,
     target_q = rewards + tf.pow(gamma, gamma_powers) * (1 - dones) * next_values
 
     with tf.GradientTape() as tape:
-        current_q = critic_1([rnn_flat_states, actions], training=True)
+        current_q = critic_1([states, actions], training=True)
         c1_loss = mse_loss(current_q, target_q)
     gradients = tape.gradient(c1_loss, critic_1.trainable_variables)
     critic_optimizer.apply_gradients(zip(gradients, critic_1.trainable_variables))
 
     with tf.GradientTape() as tape:
-        current_q = critic_2([rnn_flat_states, actions], training=True)
+        current_q = critic_2([states, actions], training=True)
         c2_loss = mse_loss(current_q, target_q)
     gradients = tape.gradient(c2_loss, critic_2.trainable_variables)
     critic_optimizer.apply_gradients(zip(gradients, critic_2.trainable_variables))
@@ -139,14 +139,14 @@ def train_critics(actor_hx, states, actions, next_states, rewards, gamma_powers,
 def train_actor(states, hidden_rnn_states):
     alpha = tf.math.exp(alpha_log)
     with tf.GradientTape() as tape:
-        mu, log_sigma, ___, rnn_flat_states = actor([states, hidden_rnn_states], training=True)
+        mu, log_sigma, ___ = actor([states, hidden_rnn_states], training=True)
         mu = tf.squeeze(mu)
         log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), log_std_min, log_std_max)
 
         target_actions = get_actions(mu, log_sigma)
         
-        target_q = tf.math.minimum(critic_1([rnn_flat_states, target_actions], training=False), \
-                                   critic_2([rnn_flat_states, target_actions], training=False))
+        target_q = tf.math.minimum(critic_1([states, target_actions], training=False), \
+                                   critic_2([states, target_actions], training=False))
         target_q = tf.squeeze(target_q, axis=1)
         
         sigma = tf.math.exp(log_sigma)
@@ -181,7 +181,7 @@ def soft_update_models():
 def actor_burn_in(states, hx0, trajectory_length):
     hx = hx0
     for s in states:
-        _, __, hx, ____ = actor([np.expand_dims(s, axis = 0), hx], training=False)
+        _, __, hx = actor([np.expand_dims(s, axis = 0), hx], training=False)
     return tf.tile(hx, [trajectory_length, 1])
 
 def __interpolation_step(s0, action, stack_size=4):
@@ -230,7 +230,7 @@ for i in range(num_episodes):
 
     while not done:
         #env.render()
-        mean, log_std_dev, actor_hx, __ = actor([np.expand_dims(observation, axis = 0), actor_hx], training=False)
+        mean, log_std_dev, actor_hx = actor([np.expand_dims(observation, axis = 0), actor_hx], training=False)
         throttle_action = get_actions(mean[0][0], log_std_dev[0][0])
         eng_ctrl_action = get_actions(mean[0][1], log_std_dev[0][1])
 
