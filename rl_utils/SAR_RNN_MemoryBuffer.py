@@ -1,4 +1,3 @@
-
 import numpy as np
 import tensorflow as tf
 
@@ -16,13 +15,13 @@ class SAR_NStepReturn_RandomAccess_MemoryBuffer(object):
         self.gamma_power_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
         self.dones_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
         self.actor_hidden_states_memory = []
+        self.trajectory_cache = []
         self.buffer_size = buffer_size
         self.memory_idx = 0
         self.N = N
         self.current_trajectory = []
         self.overlapping_trajectory = []
         self.burn_in_trajectory = []
-        self.trajectory_store = []
         self.burn_in_store = []
         self.collecting_burn_in = True
         self.hidden_state_idx = 0
@@ -76,11 +75,11 @@ class SAR_NStepReturn_RandomAccess_MemoryBuffer(object):
 
         if len(self.current_trajectory) == self._trajectory_size or is_terminal > 0: # trajectory shouldn't overlap episode
             # zero length trajectories are problem
-            self.trajectory_store.append(np.array(self.current_trajectory[:], dtype=np.int)) # trajectory length is less then expected
+            self.__cache(self.current_trajectory)
             self.current_trajectory = self.overlapping_trajectory[:]
             self.overlapping_trajectory = []
             if is_terminal > 0:
-                redundant_records_count = len(self.burn_in_store) - len(self.trajectory_store)
+                redundant_records_count = len(self.burn_in_store) - len(self.trajectory_cache)
                 if self._burn_in_len == 0:
                     redundant_records_count = 0
                 assert redundant_records_count >= 0, "To few burn-in trajectories"
@@ -93,20 +92,27 @@ class SAR_NStepReturn_RandomAccess_MemoryBuffer(object):
                 self.overlapping_trajectory.clear()
                 self.burn_in_trajectory.clear()
                 self.collecting_burn_in = True
-
         self.memory_idx += 1
 
+    def __cache(self, trajectory):
+        states_idxs = trajectory[:-1]
+        trajectory_idxs = trajectory[1:]
+        states_ = tf.stack(self.states_memory[states_idxs])
+        actions_ = tf.stack(self.actions_memory[trajectory_idxs])
+        next_states_ = tf.stack(self.states_memory[trajectory_idxs])
+        rewards_ = tf.stack(self.rewards_memory[trajectory_idxs])
+        gps_ = tf.stack(self.gamma_power_memory[trajectory_idxs])
+        dones_ = tf.stack(self.dones_memory[trajectory_idxs])
+        self.trajectory_cache.append((states_, actions_, next_states_, rewards_, gps_, dones_))
+
     def __call__(self, batch_size):
-        idxs = np.random.permutation(len(self.trajectory_store))[:batch_size]
+        idxs = np.random.permutation(len(self.trajectory_cache))[:batch_size]
         for idx in idxs:
-            # first state in trajectory is taken from burn-in period
-            states_idxs = self.trajectory_store[idx][:-1]
-            trajectory_idxs = self.trajectory_store[idx][1:]
             yield self.actor_hidden_states_memory[idx], \
-                    self.states_memory[self.burn_in_store[idx]] if self._burn_in_len > 0 else None, \
-                    tf.stack(self.states_memory[states_idxs]), \
-                    tf.stack(self.actions_memory[trajectory_idxs]), \
-                    tf.stack(self.states_memory[trajectory_idxs]), \
-                    tf.stack(self.rewards_memory[trajectory_idxs]), \
-                    tf.stack(self.gamma_power_memory[trajectory_idxs]), \
-                    tf.stack(self.dones_memory[trajectory_idxs])
+                    self.states_memory[self.burn_in_store[idx]], \
+                    self.trajectory_cache[idx][0], \
+                    self.trajectory_cache[idx][1], \
+                    self.trajectory_cache[idx][2], \
+                    self.trajectory_cache[idx][3], \
+                    self.trajectory_cache[idx][4], \
+                    self.trajectory_cache[idx][5]
