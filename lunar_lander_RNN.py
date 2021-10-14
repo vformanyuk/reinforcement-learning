@@ -79,9 +79,9 @@ def critic_network():
     input = keras.layers.Input(shape=(state_space_shape))
     actions_input = keras.layers.Input(shape=(outputs_count))
 
-    x = keras.layers.GRU(actor_recurrent_layer_size)(input)
-    # x = keras.layers.Flatten()(input)
-    # x = keras.layers.Dense(actor_recurrent_layer_size)(x)
+    # x = keras.layers.GRU(actor_recurrent_layer_size)(input)
+    x = keras.layers.Flatten()(input)
+    x = keras.layers.Dense(actor_recurrent_layer_size)(x)
     x = keras.layers.Concatenate()([x, actions_input])
 
     x = keras.layers.Dense(256, activation='relu')(x)
