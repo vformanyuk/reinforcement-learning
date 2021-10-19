@@ -89,7 +89,7 @@ class SARST_Rank_Priority_MemoryBuffer(object):
         self.rewards_memory[write_idx] = reward
         self.dones_memory[write_idx] = is_terminal
         if self.memory_idx >= self.buffer_size:
-            self.lookup[write_idx].td_error = td_error
+            self.lookup[write_idx].td_error = self.td_max
             self.internal_ordering_counter += 1
 
             if self.internal_ordering_counter > self.internal_ordering_threshold:

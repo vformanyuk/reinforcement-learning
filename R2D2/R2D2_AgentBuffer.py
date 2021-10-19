@@ -1,13 +1,15 @@
+from itertools import chain
 import numpy as np
 import tensorflow as tf
 
-class SAR_NStepReturn_RandomAccess_Agent_MemoryBuffer(object):
+class R2D2_AgentBuffer(object):
     def __init__(self, distributed_mode:bool, buffer_size:int, N:int, gamma:float, 
                 state_shape, action_shape, hidden_state_shape, reward_shape=None, action_type = np.float32,
                 trajectory_size=80, burn_in_length=40):
         self._distributed_mode = distributed_mode # when NOT in distributed mode trajectory cache and burn-in memory not cleared after episode end
         self._trajectory_size = trajectory_size
         self._burn_in_len = burn_in_length
+        self.buffer_size = buffer_size
         self.states_memory = np.empty(shape=(buffer_size, *state_shape), dtype = np.float32)
         self.actions_memory = np.empty(shape=(buffer_size, *action_shape), dtype = action_type)
         real_reward_shape = (buffer_size,) if reward_shape == None else (buffer_size, *reward_shape)
@@ -53,12 +55,16 @@ class SAR_NStepReturn_RandomAccess_Agent_MemoryBuffer(object):
             if len(self.burn_in_trajectory) == 1: # store hidden states for burn-in trajectory unroll
                  self.__store_hidden_state(actor_hidden_state)
             if len(self.burn_in_trajectory) == self._burn_in_len: # save burn-in trajectory and begin collecting training trajectory
-                self.__store_burn_in(self.burn_in_trajectory) # don't clear collected trajectory here
+                self.__store_burn_in(self.burn_in_trajectory) # don't clear collected trajectory here                
                 self.current_trajectory.append(self.memory_idx) # last burn-in trajectory record is first one of training trajectory
                 self.collecting_burn_in = False
 
         if len(self.current_trajectory) == self._trajectory_size or is_terminal > 0: # trajectory shouldn't overlap episode
-            # zero length trajectories are problem!
+            if len(self.current_trajectory) == 1: # trajectory must have at least legth of 2
+                # if current trajectory length is 1, then burn-in memeory can not contain redundant records
+                # thus, it is safe to take preciding state from burn-in to train trajectory
+                self.current_trajectory.insert(0, self.memory_idx - 1)
+                self.burn_in_memory[-1:].pop()
             self.__cache(self.current_trajectory)
             self.current_trajectory.clear()
             if is_terminal > 0: # this part is redundant for R2D2 agent because it's reset afte each played episode
@@ -69,7 +75,6 @@ class SAR_NStepReturn_RandomAccess_Agent_MemoryBuffer(object):
                 for _ in range(redundant_records_count):
                     self.burn_in_memory.pop()
                     self.hidden_state_idx -= 1
-                    del self.actor_hidden_states_memory[self.hidden_state_idx]
                 self.reset()
                 return
         self.memory_idx += 1
@@ -79,8 +84,6 @@ class SAR_NStepReturn_RandomAccess_Agent_MemoryBuffer(object):
             self.burn_in_memory.clear()
             self.hidden_state_idx = 0
             self.trajectory_cache.clear()
-            for i in range(len(self.actor_hidden_states_memory) - 1, -1, -1):
-                del self.actor_hidden_states_memory[i]
         self.current_trajectory.clear()
         self.burn_in_trajectory.clear()
         self.collecting_burn_in = True
@@ -109,8 +112,19 @@ class SAR_NStepReturn_RandomAccess_Agent_MemoryBuffer(object):
         dones_ = tf.stack(self.dones_memory[trajectory_idxs])
         self.trajectory_cache.append((states_, actions_, next_states_, rewards_, gps_, dones_))
 
-    def get_all_trajectories(self):
-        return self(len(self.trajectory_cache))
+    def get_tail(self, batch_size):
+        upper_bound = len(self.trajectory_cache)
+        lower_bound = upper_bound - batch_size
+        assert lower_bound > 0, "Too few records in trajectory cache"
+        for idx in range(lower_bound, upper_bound):
+            yield self.actor_hidden_states_memory[idx], \
+                    self.burn_in_memory[idx], \
+                    self.trajectory_cache[idx][0], \
+                    self.trajectory_cache[idx][1], \
+                    self.trajectory_cache[idx][2], \
+                    self.trajectory_cache[idx][3], \
+                    self.trajectory_cache[idx][4], \
+                    self.trajectory_cache[idx][5]
 
     def __call__(self, batch_size):
         idxs = np.random.permutation(len(self.trajectory_cache))[:batch_size]

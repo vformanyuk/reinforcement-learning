@@ -4,7 +4,7 @@ import tensorflow as tf
 from tensorflow.python.ops.gen_array_ops import shape
 import tensorflow_probability as tfp
 from tensorflow import keras
-from rl_utils.SAR_RNN_NReturn_RandomAccess_MemoryBuffer import SAR_NStepReturn_RandomAccess_MemoryBuffer
+from rl_utils.SAR_RNN_NReturn_RankPriority_MemoryBuffer import SAR_NStepReturn_RankPriority_MemoryBuffer
 
 # prevent TensorFlow of allocating whole GPU memory
 gpus = tf.config.experimental.list_physical_devices('GPU')
@@ -49,15 +49,17 @@ mse_loss = tf.keras.losses.MeanSquaredError()
 gaus_distr = tfp.distributions.Normal(0,1)
 
 alpha_log = tf.Variable(0.5, dtype = tf.float32, trainable=True)
+trajectory_n = tf.constant(0.9, dtype=tf.float32)
 
 tf.random.set_seed(RND_SEED)
 np.random.random(RND_SEED)
 
-exp_buffer = SAR_NStepReturn_RandomAccess_MemoryBuffer(distributed_mode=False, buffer_size=1001, N=4, gamma=gamma, 
+exp_buffer = SAR_NStepReturn_RankPriority_MemoryBuffer(distributed_mode=False, buffer_size=1001, N=4, gamma=gamma, 
                                                         state_shape=(stack_size, env.observation_space.shape[0]),
                                                         action_shape=env.action_space.shape, 
                                                         hidden_state_shape=(actor_recurrent_layer_size,), 
-                                                        trajectory_size=40, burn_in_length=burn_in_length)
+                                                        trajectory_size=40, burn_in_length=burn_in_length,
+                                                        alpha=0.5, beta=0.7, beta_increase_rate=1)
 
 def policy_network():
     input = keras.layers.Input(shape=(state_space_shape))
@@ -158,7 +160,7 @@ def train_actor(states, hidden_rnn_states):
         log_probs = get_log_probs(mu, sigma, target_actions)
 
         actor_loss = tf.reduce_mean(alpha * log_probs - target_q)
-        
+
         with tf.GradientTape() as alpha_tape:
             alpha_loss = -tf.reduce_mean(alpha_log * tf.stop_gradient(log_probs + target_entropy))
         alpha_gradients = alpha_tape.gradient(alpha_loss, alpha_log)
@@ -167,6 +169,29 @@ def train_actor(states, hidden_rnn_states):
     gradients = tape.gradient(actor_loss, actor.trainable_variables)
     actor_optimizer.apply_gradients(zip(gradients, actor.trainable_variables))
     return actor_loss
+
+@tf.function(experimental_relax_shapes=True)
+def get_trajectory_error(states, next_states, rewards, gamma_powers, dones, hidden_rnn_states):
+    mu, log_sigma, ___ = actor([next_states, hidden_rnn_states], training=False)
+    mu = tf.squeeze(mu)
+    log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), log_std_min, log_std_max)
+
+    next_actions = get_actions(mu, log_sigma)
+    if next_actions.shape.rank == 1: # it's possible to get trajectory of length 1
+        next_actions = tf.expand_dims(next_actions, axis=0)
+    
+    target_q = tf.math.minimum(critic_1([next_states, next_actions], training=False), \
+                               critic_2([next_states, next_actions], training=False))
+    target_q = rewards + tf.math.pow(gamma, gamma_powers + 1) * (1 - dones) * tf.squeeze(target_q, axis=1)
+
+    current_q = tf.math.minimum(critic_1([states, actions], training=False), \
+                                critic_2([states, actions], training=False))
+
+    td_errors = target_q - tf.squeeze(current_q, axis=1)
+    if td_errors.shape.rank == 0:
+        return td_errors
+
+    return tf.reduce_max(td_errors) * trajectory_n + (1-trajectory_n)*tf.reduce_mean(td_errors)
 
 def soft_update_models():
     target_critic_1_weights = target_critic_1.get_weights()
