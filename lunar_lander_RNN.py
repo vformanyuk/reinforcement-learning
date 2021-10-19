@@ -11,7 +11,7 @@ gpus = tf.config.experimental.list_physical_devices('GPU')
 tf.config.experimental.set_memory_growth(gpus[0], True)
 
 stack_size = 4
-burn_in_length = 10
+burn_in_length = 20
 
 actor_recurrent_layer_size = 256
 critic_recurrent_layer_size = 256
@@ -59,7 +59,7 @@ exp_buffer = SAR_NStepReturn_RandomAccess_Agent_MemoryBuffer(distributed_mode=Fa
                                                             state_shape=(stack_size, env.observation_space.shape[0]),
                                                             action_shape=env.action_space.shape, 
                                                             hidden_state_shape=(actor_recurrent_layer_size,), 
-                                                            trajectory_size=40, trajectory_overlap=0, burn_in_length=burn_in_length)
+                                                            trajectory_size=40, burn_in_length=burn_in_length)
 
 def policy_network():
     input = keras.layers.Input(shape=(state_space_shape))
