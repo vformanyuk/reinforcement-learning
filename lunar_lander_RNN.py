@@ -4,7 +4,7 @@ import tensorflow as tf
 from tensorflow.python.ops.gen_array_ops import shape
 import tensorflow_probability as tfp
 from tensorflow import keras
-from rl_utils.SAR_RNN_MemoryBuffer import SAR_NStepReturn_RandomAccess_MemoryBuffer
+from rl_utils.SAR_RNN_MemoryBuffer_AgentBuffer import SAR_NStepReturn_RandomAccess_Agent_MemoryBuffer
 
 # prevent TensorFlow of allocating whole GPU memory
 gpus = tf.config.experimental.list_physical_devices('GPU')
@@ -20,14 +20,14 @@ env = gym.make('LunarLanderContinuous-v2')
 state_space_shape = (stack_size, env.observation_space.shape[0])
 outputs_count = env.action_space.shape[0]
 
-batch_size = 128
+batch_size = 64
 num_episodes = 5000
 actor_learning_rate = 3e-4
 critic_learning_rate = 3e-4
 alpha_learning_rate = 3e-4
 gamma = 0.99
 tau = 0.005
-gradient_step = 3
+gradient_step = 2
 log_std_min=-20
 log_std_max=2
 action_bounds_epsilon=1e-6
@@ -55,8 +55,11 @@ np.random.random(RND_SEED)
 
 exp_buffer_capacity = 1000000
 
-exp_buffer = SAR_NStepReturn_RandomAccess_MemoryBuffer(exp_buffer_capacity, 4, 0.99, state_space_shape, env.action_space.shape, 
-                                                        trajectory_size=40, trajectory_overlap=20, burn_in_length=burn_in_length)
+exp_buffer = SAR_NStepReturn_RandomAccess_Agent_MemoryBuffer(distributed_mode=False, buffer_size=1001, N=4, gamma=gamma, 
+                                                            state_shape=(stack_size, env.observation_space.shape[0]),
+                                                            action_shape=env.action_space.shape, 
+                                                            hidden_state_shape=(actor_recurrent_layer_size,), 
+                                                            trajectory_size=40, trajectory_overlap=0, burn_in_length=burn_in_length)
 
 def policy_network():
     input = keras.layers.Input(shape=(state_space_shape))
@@ -106,12 +109,12 @@ def get_log_probs(mu, sigma, actions):
 
 @tf.function(experimental_relax_shapes=True)
 def train_critics(actor_hx, states, actions, next_states, rewards, gamma_powers, dones):
-    mu, log_sigma, ___ = actor([next_states, actor_hx], training=False)
+    mu, log_sigma, ___ = actor([next_states, actor_hx], training=False) # len(target_actions)==1 => len(next_states)==1
     mu = tf.squeeze(mu)
     log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), log_std_min, log_std_max)
 
     target_actions = get_actions(mu, log_sigma)
-
+    # ConcatOp : Ranks of all input tensors should match: shape[0] = [1,256] vs. shape[1] = [2] => len(target_actions)==1
     min_q = tf.math.minimum(target_critic_1([next_states, target_actions], training=False), \
                             target_critic_2([next_states, target_actions], training=False))
     min_q = tf.squeeze(min_q, axis=1)
@@ -178,10 +181,11 @@ def soft_update_models():
         updated_critic_2_weights.append(tau * cw + (1.0 - tau) * tcw)
     target_critic_2.set_weights(updated_critic_2_weights)
 
+@tf.function(experimental_relax_shapes=True)
 def actor_burn_in(states, hx0, trajectory_length):
-    hx = hx0
+    hx = tf.expand_dims(hx0, axis=0)
     for s in states:
-        _, __, hx = actor([np.expand_dims(s, axis = 0), hx], training=False)
+        _, __, hx = actor([tf.expand_dims(s, axis = 0), hx], training=False)
     return tf.tile(hx, [trajectory_length, 1])
 
 def __interpolation_step(s0, action, stack_size=4):
@@ -239,10 +243,10 @@ for i in range(num_episodes):
 
         exp_buffer.store(actor_hx, observation, [throttle_action, eng_ctrl_action], reward, float(done))
 
-        if global_step > 4 * batch_size:
+        if global_step > 10 * batch_size:
             # get one trajectory at a time
             for actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones in exp_buffer(batch_size):
-                actor_training_hx = actor_burn_in(burn_in_states, actor_h, len(rewards))
+                actor_training_hx = actor_burn_in(burn_in_states, actor_h, tf.convert_to_tensor(len(rewards), dtype=tf.int32))
                 for _ in range(gradient_step):
                     critic1_loss, critic2_loss = train_critics(actor_training_hx, states, actions, next_states, rewards, gamma_powers, dones)
                     critic_loss_history.append(critic1_loss)
