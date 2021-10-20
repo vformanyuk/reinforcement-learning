@@ -148,13 +148,15 @@ class SAR_NStepReturn_RankPriority_MemoryBuffer(object):
         rewards_ = tf.stack(self.rewards_memory[trajectory_idxs])
         gps_ = tf.stack(self.gamma_power_memory[trajectory_idxs])
         dones_ = tf.stack(self.dones_memory[trajectory_idxs])
+        # if len(trajectory_idxs) == 1: # need to expand dims for non-states data, otherwise concatination ops will fail
+        #     actions_ = tf.expand_dims(actions_, axis=0)
+        #     rewards_ = tf.expand_dims(rewards_, axis=0)
+        #     gps_ = tf.expand_dims(gps_, axis=0)
+        #     dones_ = tf.expand_dims(dones_, axis=0)
         self.trajectory_cache.append((states_, actions_, next_states_, rewards_, gps_, dones_))
+        # importanse sampling 
         container = rank_container(len(self.trajectory_cache) - 1, self.td_max)
         self.ordered_storage.append(container) #keep high error records in the end of array
-
-    # def calculate_trajectory_priority(self, states_td_errors:tf.Tensor): # TODO move to training script
-    #     n=0.9
-    #     return n*tf.reduce_max(states_td_errors) + (1-n)*tf.reduce_mean(states_td_errors)
 
     def update_priorities(self, meta_idxs, td_errors):
         to_remove = []
@@ -181,7 +183,8 @@ class SAR_NStepReturn_RankPriority_MemoryBuffer(object):
             meta_idx = np.random.randint(low=max(storage_len - interval_end, 0), high=storage_len - interval_start, size=1)[0] #reverse intervals because higher error records are in the end
             container = self.ordered_storage[meta_idx]
             idxs.append(container.replay_buffer_idx)
-            is_weight = np.power(self.buffer_size * np.power(meta_idx,-self.alpha) / aprox_total, -self.beta)
+            # originaly instead of len(self.trajectory_cache) was buffer_size=1000000
+            is_weight = np.power(len(self.trajectory_cache) * np.power(meta_idx,-self.alpha) / aprox_total, -self.beta)
             if is_weight > self.max_is_weight:
                 self.max_is_weight = is_weight
             importance_sampling_weights[k] = is_weight
@@ -189,7 +192,9 @@ class SAR_NStepReturn_RankPriority_MemoryBuffer(object):
             interval_start = interval_end
         
         self.beta = min(1, self.beta * self.beta_inc_rate)
+        IS_weights_IT = iter(importance_sampling_weights)
         for idx in idxs:
+            normalized_IS_weight = float(next(IS_weights_IT) / self.max_is_weight)
             yield self.actor_hidden_states_memory[idx], \
                     self.burn_in_memory[idx], \
                     self.trajectory_cache[idx][0], \
@@ -198,5 +203,5 @@ class SAR_NStepReturn_RankPriority_MemoryBuffer(object):
                     self.trajectory_cache[idx][3], \
                     self.trajectory_cache[idx][4], \
                     self.trajectory_cache[idx][5], \
-                    tf.fill(self.trajectory_cache[idx][1].shape.as_list(), float(importance_sampling_weights / self.max_is_weight)), \
+                    tf.fill(self.trajectory_cache[idx][4].shape.as_list(), normalized_IS_weight), \
                     idx

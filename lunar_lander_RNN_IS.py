@@ -1,8 +1,9 @@
 import gym
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.ops.gen_array_ops import shape
 import tensorflow_probability as tfp
+
+from datetime import datetime
 from tensorflow import keras
 from rl_utils.SAR_RNN_NReturn_RankPriority_MemoryBuffer import SAR_NStepReturn_RankPriority_MemoryBuffer
 
@@ -108,13 +109,14 @@ def get_log_probs(mu, sigma, actions):
     return log_probs
 
 @tf.function(experimental_relax_shapes=True)
-def train_critics(actor_hx, states, actions, next_states, rewards, gamma_powers, dones):
+def train_critics(actor_hx, states, actions, next_states, rewards, gamma_powers, is_weights, dones):
     mu, log_sigma, ___ = actor([next_states, actor_hx], training=False)
     mu = tf.squeeze(mu)
     log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), log_std_min, log_std_max)
 
     target_actions = get_actions(mu, log_sigma)
-    if target_actions.shape.rank == 1: # it's possible to get trajectory of length 1
+    target_actions_shape = tf.shape(target_actions)
+    if len(target_actions_shape)  < 2:
         target_actions = tf.expand_dims(target_actions, axis=0)
 
     min_q = tf.math.minimum(target_critic_1([next_states, target_actions], training=False), \
@@ -129,13 +131,15 @@ def train_critics(actor_hx, states, actions, next_states, rewards, gamma_powers,
 
     with tf.GradientTape() as tape:
         current_q = critic_1([states, actions], training=True)
-        c1_loss = mse_loss(current_q, target_q)
+        # c1_loss = mse_loss(current_q, target_q)
+        c1_loss = 0.5 * tf.reduce_mean(is_weights * tf.pow(target_q - current_q, 2))
     gradients = tape.gradient(c1_loss, critic_1.trainable_variables)
     critic_optimizer.apply_gradients(zip(gradients, critic_1.trainable_variables))
 
     with tf.GradientTape() as tape:
         current_q = critic_2([states, actions], training=True)
-        c2_loss = mse_loss(current_q, target_q)
+        # c2_loss = mse_loss(current_q, target_q)
+        c2_loss = 0.5 * tf.reduce_mean(is_weights * tf.pow(target_q - current_q, 2))
     gradients = tape.gradient(c2_loss, critic_2.trainable_variables)
     critic_optimizer.apply_gradients(zip(gradients, critic_2.trainable_variables))
     return c1_loss, c2_loss
@@ -149,7 +153,8 @@ def train_actor(states, hidden_rnn_states):
         log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), log_std_min, log_std_max)
 
         target_actions = get_actions(mu, log_sigma)
-        if target_actions.shape.rank == 1: # it's possible to get trajectory of length 1
+        target_actions_shape = tf.shape(target_actions)
+        if len(target_actions_shape)  < 2:
             target_actions = tf.expand_dims(target_actions, axis=0)
         
         target_q = tf.math.minimum(critic_1([states, target_actions], training=False), \
@@ -171,13 +176,14 @@ def train_actor(states, hidden_rnn_states):
     return actor_loss
 
 @tf.function(experimental_relax_shapes=True)
-def get_trajectory_error(states, next_states, rewards, gamma_powers, dones, hidden_rnn_states):
+def get_trajectory_error(states, actions, next_states, rewards, gamma_powers, dones, hidden_rnn_states):
     mu, log_sigma, ___ = actor([next_states, hidden_rnn_states], training=False)
     mu = tf.squeeze(mu)
     log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), log_std_min, log_std_max)
 
     next_actions = get_actions(mu, log_sigma)
-    if next_actions.shape.rank == 1: # it's possible to get trajectory of length 1
+    next_actions_shape = tf.shape(next_actions)
+    if len(next_actions_shape)  < 2:
         next_actions = tf.expand_dims(next_actions, axis=0)
     
     target_q = tf.math.minimum(critic_1([next_states, next_actions], training=False), \
@@ -188,7 +194,8 @@ def get_trajectory_error(states, next_states, rewards, gamma_powers, dones, hidd
                                 critic_2([states, actions], training=False))
 
     td_errors = target_q - tf.squeeze(current_q, axis=1)
-    if td_errors.shape.rank == 0:
+    td_errors_shape = tf.shape(td_errors)
+    if len(td_errors_shape) == 0:
         return td_errors
 
     return tf.reduce_max(td_errors) * trajectory_n + (1-trajectory_n)*tf.reduce_mean(td_errors)
@@ -258,6 +265,7 @@ for i in range(num_episodes):
     actor_loss_history = []
 
     actor_hx = tf.zeros(shape=(1, actor_recurrent_layer_size), dtype=tf.float32)
+    start_time = datetime.now()
 
     while not done:
         #env.render()
@@ -270,18 +278,24 @@ for i in range(num_episodes):
 
         exp_buffer.store(actor_hx, observation, [throttle_action, eng_ctrl_action], reward, float(done))
 
-        if global_step > 10 * batch_size:
+        if exp_buffer.get_trajectories_count() > 2*batch_size:
+            td_errors = dict()
+            meta_idxs = list()
             # get one trajectory at a time
-            for actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones in exp_buffer(batch_size):
+            for actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones, is_weights, meta_idx in exp_buffer.sample(batch_size):
                 actor_training_hx = actor_burn_in(burn_in_states, actor_h, tf.convert_to_tensor(len(rewards), dtype=tf.int32))
+                meta_idxs.append(meta_idx)
                 for _ in range(gradient_step):
-                    critic1_loss, critic2_loss = train_critics(actor_training_hx, states, actions, next_states, rewards, gamma_powers, dones)
+                    critic1_loss, critic2_loss = train_critics(actor_training_hx, states, actions, next_states, rewards, gamma_powers, is_weights, dones)
                     critic_loss_history.append(critic1_loss)
                     critic_loss_history.append(critic2_loss)
                 
                     actor_loss = train_actor(states, actor_training_hx)
                     actor_loss_history.append(actor_loss)
+                td_errors[meta_idx] = get_trajectory_error(states, actions, next_states, rewards, gamma_powers, dones, actor_training_hx)
                 soft_update_models()
+            meta_idxs.sort(reverse=True) # ensure reversed order of updaing errors
+            exp_buffer.update_priorities(meta_idxs, [td_errors[idx] for idx in meta_idxs])
 
         observation = next_observation
         global_step+=1
@@ -290,7 +304,10 @@ for i in range(num_episodes):
 
     rewards_history.append(episodic_reward)
     last_mean = np.mean(rewards_history[-100:])
-    print(f'[epoch {i} ({epoch_steps})] Actor_Loss: {np.mean(actor_loss_history):.4f} Critic_Loss: {np.mean(critic_loss_history):.4f} Total reward: {episodic_reward} Mean(100)={last_mean:.4f}')
+    delta_time = datetime.now() - start_time
+    episode_minutes = int(delta_time.seconds / 60)
+    episode_seconds = delta_time.seconds - episode_minutes * 60
+    print(f'[epoch {i} ({epoch_steps}) {episode_minutes}:{episode_seconds}] Actor_Loss: {np.mean(actor_loss_history):.4f} Critic_Loss: {np.mean(critic_loss_history):.4f} Total reward: {episodic_reward} Mean(100)={last_mean:.4f}')
     if last_mean > 200:
         break
 env.close()

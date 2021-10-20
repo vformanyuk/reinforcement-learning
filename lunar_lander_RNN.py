@@ -1,8 +1,9 @@
 import gym
 import numpy as np
 import tensorflow as tf
-from tensorflow.python.ops.gen_array_ops import shape
 import tensorflow_probability as tfp
+
+from datetime import datetime
 from tensorflow import keras
 from rl_utils.SAR_RNN_NReturn_RandomAccess_MemoryBuffer import SAR_NStepReturn_RandomAccess_MemoryBuffer
 
@@ -112,7 +113,8 @@ def train_critics(actor_hx, states, actions, next_states, rewards, gamma_powers,
     log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), log_std_min, log_std_max)
 
     target_actions = get_actions(mu, log_sigma)
-    if target_actions.shape.rank == 1: # it's possible to get trajectory of length 1
+    target_actions_shape = tf.shape(target_actions)
+    if len(target_actions_shape)  < 2:
         target_actions = tf.expand_dims(target_actions, axis=0)
 
     min_q = tf.math.minimum(target_critic_1([next_states, target_actions], training=False), \
@@ -147,7 +149,8 @@ def train_actor(states, hidden_rnn_states):
         log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), log_std_min, log_std_max)
 
         target_actions = get_actions(mu, log_sigma)
-        if target_actions.shape.rank == 1: # it's possible to get trajectory of length 1
+        target_actions_shape = tf.shape(target_actions)
+        if len(target_actions_shape)  < 2:
             target_actions = tf.expand_dims(target_actions, axis=0)
         
         target_q = tf.math.minimum(critic_1([states, target_actions], training=False), \
@@ -233,6 +236,7 @@ for i in range(num_episodes):
     actor_loss_history = []
 
     actor_hx = tf.zeros(shape=(1, actor_recurrent_layer_size), dtype=tf.float32)
+    start_time = datetime.now()
 
     while not done:
         #env.render()
@@ -265,7 +269,10 @@ for i in range(num_episodes):
 
     rewards_history.append(episodic_reward)
     last_mean = np.mean(rewards_history[-100:])
-    print(f'[epoch {i} ({epoch_steps})] Actor_Loss: {np.mean(actor_loss_history):.4f} Critic_Loss: {np.mean(critic_loss_history):.4f} Total reward: {episodic_reward} Mean(100)={last_mean:.4f}')
+    delta_time = datetime.now() - start_time
+    episode_minutes = int(delta_time.seconds / 60)
+    episode_seconds = delta_time.seconds - episode_minutes * 60
+    print(f'[epoch {i} ({epoch_steps}) {episode_minutes}:{episode_seconds}] Actor_Loss: {np.mean(actor_loss_history):.4f} Critic_Loss: {np.mean(critic_loss_history):.4f} Total reward: {episodic_reward} Mean(100)={last_mean:.4f}')
     if last_mean > 200:
         break
 env.close()

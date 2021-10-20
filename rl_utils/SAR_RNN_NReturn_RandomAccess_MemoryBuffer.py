@@ -108,6 +108,11 @@ class SAR_NStepReturn_RandomAccess_MemoryBuffer(object):
         rewards_ = tf.stack(self.rewards_memory[trajectory_idxs])
         gps_ = tf.stack(self.gamma_power_memory[trajectory_idxs])
         dones_ = tf.stack(self.dones_memory[trajectory_idxs])
+        # if len(trajectory_idxs) == 1: # need to expand dims for non-states data, otherwise concatination ops will fail
+        #     actions_ = tf.expand_dims(actions_, axis=0)
+        #     rewards_ = tf.expand_dims(rewards_, axis=0)
+        #     gps_ = tf.expand_dims(gps_, axis=0)
+        #     dones_ = tf.expand_dims(dones_, axis=0)
         self.trajectory_cache.append((states_, actions_, next_states_, rewards_, gps_, dones_))
 
     def get_all_trajectories(self):
