@@ -4,6 +4,7 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 import multiprocessing as mp
 
+from R2D2.DTOs import AgentTransmitionBuffer
 from R2D2.neural_networks import policy_network, critic_network
 from R2D2.R2D2_AgentBuffer import R2D2_AgentBuffer
 
@@ -43,32 +44,31 @@ class Actor(object):
             self.cmd_pipe.send([0, self.id])
             weights = self.weights_pipe.recv()
             self.actor.set_weights(weights[0])
-            self.critic1.set_weights(weights[1])
-            self.critic2.set_weights(weights[2])
+            self.critic_1.set_weights(weights[1])
+            self.critic_2.set_weights(weights[2])
             self.log(f'Target actor and target critic weights refreshed.')
         except EOFError:
             print("[get_target_weights] Connection closed.")
         except OSError:
             print("[get_target_weights] Connection closed.")
 
-    def send_replay_data(self, states, actions, next_states, rewards, gamma_powers, dones, td_errors):
-        buffer = []
-        for i in range(len(states)):
-            buffer.append([states[i], actions[i], next_states[i], rewards[i], gamma_powers[i], dones[i], td_errors[i]])
+    def send_replay_data(self, data:AgentTransmitionBuffer):
         try:
             self.cmd_pipe.send([1, self.id])
             self.log(f'Replay data command sent.')
-            self.replay_pipe.send(buffer)
+            self.replay_pipe.send(data)
             self.log(f'Replay data sent.')
         except EOFError:
             print("[send_replay_data] Connection closed.")
         except OSError:
             print("[send_replay_data] Connection closed.")
 
-    def __prepare_and_send_replay_data(self, exp_buffer:R2D2_AgentBuffer, batch_length:int):
-        states, actions, next_states, rewards, gamma_powers, dones, _ = exp_buffer.get_tail_batch(batch_length)
-        td_errors = self.get_td_errors(states, actions, next_states, rewards, gamma_powers, dones)
-        self.send_replay_data(states, actions, next_states, rewards, gamma_powers, dones, td_errors)
+    def prepare_and_send_replay_data(self, exp_buffer:R2D2_AgentBuffer, batch_length:int):
+        transmittion_buffer = AgentTransmitionBuffer()
+        for actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones in exp_buffer.get_tail(batch_length):
+            td_errors = self.get_trajectory_error(states, actions, next_states, rewards, gamma_powers, dones, actor_h)
+            transmittion_buffer.append(actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones, td_errors)
+        self.send_replay_data(transmittion_buffer)
 
     @tf.function(experimental_relax_shapes=True)
     def get_actions(self, mu, log_sigma):
@@ -107,7 +107,7 @@ class Actor(object):
 
         return tf.reduce_max(td_errors) * self.trajectory_n + (1 - self.trajectory_n) * tf.reduce_mean(td_errors)
 
-    def __interpolation_step(self, env, s0, action, stack_size=4):
+    def interpolation_step(self, env, s0, action, stack_size=4):
         result_states = []
         sN, r, d, _ = env.step(action)
         #interpolate between s0 and sN
@@ -165,13 +165,13 @@ class Actor(object):
                 throttle_action = self.get_actions(mean[0][0], log_std_dev[0][0])
                 eng_ctrl_action = self.get_actions(mean[0][1], log_std_dev[0][1])
 
-                next_observation, reward, done = self.__interpolation_step(env, state0, [throttle_action, eng_ctrl_action])
+                next_observation, reward, done = self.interpolation_step(env, state0, [throttle_action, eng_ctrl_action])
                 state0 = next_observation[-1:][0]
 
                 exp_buffer.store(actor_hx, observation, [throttle_action, eng_ctrl_action], reward, float(done))
 
                 if (epoch_steps % (self.data_send_steps + self.N) == 0 and epoch_steps > 0) or done:
-                    self.__prepare_and_send_replay_data(exp_buffer, self.data_send_steps)
+                    self.prepare_and_send_replay_data(exp_buffer, self.data_send_steps)
 
                 if global_step % self.exchange_steps == 0 and self.training_active.value > 0: # update target networks every 'exchange_steps'
                     self.get_target_weights()

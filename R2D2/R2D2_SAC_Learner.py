@@ -150,22 +150,11 @@ class Learner(object):
         training_runs = 1
         while self.cancellation_token.value == 0:
             self.cmd_pipe.send(CMD_GET_REPLAY_DATA)
-            trajectories = self.replay_data_pipe.recv()
+            trajectories = self.replay_data_pipe.recv() # LearnerTransmitionBuffer
             
             td_errors = dict()
-
-            for b in trajectories:
-                actor_h = b[0]
-                burn_in_states = b[1]
-                states = b[2]
-                actions = b[3]
-                next_states = b[4]
-                rewards = b[5]
-                gamma_powers = b[6]
-                dones = b[7]
-                is_weights = b[8]
-                meta_idx = b[9] # single value. One for fetched trajectory
-
+            # actor_h and meta_idx are single tensors. Others are mini batches of values
+            for actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones, is_weights, meta_idx in trajectories:
                 actor_training_hx = self.actor_burn_in(burn_in_states, actor_h, tf.convert_to_tensor(len(rewards), dtype=tf.int32))
                 for _ in range(self.gradient_step):
                     critic1_loss, critic2_loss = self.train_critics(actor_training_hx, states, actions, next_states, rewards, gamma_powers, is_weights, dones)
@@ -219,7 +208,7 @@ class Learner(object):
 
     @tf.function(experimental_relax_shapes=True)
     def actor_burn_in(self, states, hx0, trajectory_length):
-        hx = tf.expand_dims(hx0, axis=0)
+        hx = hx0# hx = tf.expand_dims(hx0, axis=0)
         for s in states:
             _, __, hx = self.actor([tf.expand_dims(s, axis = 0), hx], training=False)
         return tf.tile(hx, [trajectory_length, 1])

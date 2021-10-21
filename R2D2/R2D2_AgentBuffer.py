@@ -16,11 +16,10 @@ class R2D2_AgentBuffer(object):
         self.rewards_memory = np.empty(shape=real_reward_shape, dtype = np.float32)
         self.gamma_power_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
         self.dones_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
-        self.actor_hidden_states_memory = np.empty(shape=(buffer_size, *hidden_state_shape), dtype = np.float32)
+        self.actor_hidden_states_memory = []
         self.burn_in_memory = []
         self.trajectory_cache = []
         self.memory_idx = 0
-        self.hidden_state_idx = 0
         self.N = N
         self.current_trajectory = []
         self.burn_in_trajectory = []
@@ -53,7 +52,7 @@ class R2D2_AgentBuffer(object):
         if self._burn_in_len > 0 and len(self.burn_in_trajectory) < self._burn_in_len:
             self.burn_in_trajectory.append(self.memory_idx)
             if len(self.burn_in_trajectory) == 1: # store hidden states for burn-in trajectory unroll
-                 self.__store_hidden_state(actor_hidden_state)
+                 self.actor_hidden_states_memory.append(actor_hidden_state)
             if len(self.burn_in_trajectory) == self._burn_in_len: # save burn-in trajectory and begin collecting training trajectory
                 self.__store_burn_in(self.burn_in_trajectory) # don't clear collected trajectory here                
                 self.current_trajectory.append(self.memory_idx) # last burn-in trajectory record is first one of training trajectory
@@ -74,7 +73,7 @@ class R2D2_AgentBuffer(object):
                 # Only trajectory store contains correct number of records
                 for _ in range(redundant_records_count):
                     self.burn_in_memory.pop()
-                    self.hidden_state_idx -= 1
+                    self.actor_hidden_states_memory.pop()
                 self.reset()
                 return
         self.memory_idx += 1
@@ -82,7 +81,7 @@ class R2D2_AgentBuffer(object):
     def reset(self):
         if self._distributed_mode: # in distribured mode (for APE-X or R2D2) memory completly cleared after every episode
             self.burn_in_memory.clear()
-            self.hidden_state_idx = 0
+            self.actor_hidden_states_memory.clear()
             self.trajectory_cache.clear()
         self.current_trajectory.clear()
         self.burn_in_trajectory.clear()
@@ -94,10 +93,6 @@ class R2D2_AgentBuffer(object):
         for idx in burn_in:
             burn_in_trajectory.append(tf.convert_to_tensor(self.states_memory[idx], dtype=tf.float32))
         self.burn_in_memory.append(burn_in_trajectory)
-
-    def __store_hidden_state(self, hidden_state):
-        self.actor_hidden_states_memory[self.hidden_state_idx] = hidden_state
-        self.hidden_state_idx+=1
 
     def __cache(self, trajectory):
         states_idxs = trajectory[:-1]
