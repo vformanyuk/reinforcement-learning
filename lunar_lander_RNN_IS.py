@@ -13,6 +13,7 @@ tf.config.experimental.set_memory_growth(gpus[0], True)
 
 stack_size = 4
 burn_in_length = 10
+trajectory_length = 40
 
 actor_recurrent_layer_size = 256
 critic_recurrent_layer_size = 256
@@ -59,8 +60,8 @@ exp_buffer = SAR_NStepReturn_RankPriority_MemoryBuffer(distributed_mode=False, b
                                                         state_shape=(stack_size, env.observation_space.shape[0]),
                                                         action_shape=env.action_space.shape, 
                                                         hidden_state_shape=(actor_recurrent_layer_size,), 
-                                                        trajectory_size=40, burn_in_length=burn_in_length,
-                                                        alpha=0.5, beta=0.7, beta_increase_rate=1)
+                                                        trajectory_size=trajectory_length, burn_in_length=burn_in_length,
+                                                        alpha=0.7, beta=0.5, beta_increase_rate=1)
 
 def policy_network():
     input = keras.layers.Input(shape=(state_space_shape))

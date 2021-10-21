@@ -12,23 +12,23 @@ gpus = tf.config.experimental.list_physical_devices('GPU')
 tf.config.experimental.set_memory_growth(gpus[0], True)
 
 stack_size = 4
-burn_in_length = 10
+burn_in_length = 28
+trajectory_length = 100
 
 actor_recurrent_layer_size = 256
-critic_recurrent_layer_size = 256
 
 env = gym.make('LunarLanderContinuous-v2')
 state_space_shape = (stack_size, env.observation_space.shape[0])
 outputs_count = env.action_space.shape[0]
 
-batch_size = 64
+batch_size = 1
 num_episodes = 5000
 actor_learning_rate = 3e-4
 critic_learning_rate = 3e-4
 alpha_learning_rate = 3e-4
 gamma = 0.99
 tau = 0.005
-gradient_step = 2
+gradient_step = 1
 log_std_min=-20
 log_std_max=2
 action_bounds_epsilon=1e-6
@@ -58,7 +58,7 @@ exp_buffer = SAR_NStepReturn_RandomAccess_MemoryBuffer(distributed_mode=False, b
                                                         state_shape=(stack_size, env.observation_space.shape[0]),
                                                         action_shape=env.action_space.shape, 
                                                         hidden_state_shape=(actor_recurrent_layer_size,), 
-                                                        trajectory_size=40, burn_in_length=burn_in_length)
+                                                        trajectory_size=trajectory_length, burn_in_length=burn_in_length)
 
 def policy_network():
     input = keras.layers.Input(shape=(state_space_shape))
@@ -188,7 +188,7 @@ def soft_update_models():
 
 @tf.function(experimental_relax_shapes=True)
 def actor_burn_in(states, hx0, trajectory_length):
-    hx = tf.expand_dims(hx0, axis=0)
+    hx = hx0 # tf.expand_dims(hx0, axis=0)
     for s in states:
         _, __, hx = actor([tf.expand_dims(s, axis = 0), hx], training=False)
     return tf.tile(hx, [trajectory_length, 1])
@@ -249,7 +249,7 @@ for i in range(num_episodes):
 
         exp_buffer.store(actor_hx, observation, [throttle_action, eng_ctrl_action], reward, float(done))
 
-        if global_step > 10 * batch_size:
+        if len(exp_buffer) > 10:
             # get one trajectory at a time
             for actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones in exp_buffer(batch_size):
                 actor_training_hx = actor_burn_in(burn_in_states, actor_h, tf.convert_to_tensor(len(rewards), dtype=tf.int32))

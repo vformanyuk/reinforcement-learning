@@ -28,11 +28,10 @@ class SAR_NStepReturn_RankPriority_MemoryBuffer(object):
         self.rewards_memory = np.empty(shape=real_reward_shape, dtype = np.float32)
         self.gamma_power_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
         self.dones_memory = np.empty(shape=(buffer_size,), dtype = np.float32)
-        self.actor_hidden_states_memory = np.empty(shape=(buffer_size, *hidden_state_shape), dtype = np.float32)
+        self.actor_hidden_states_memory = []
         self.burn_in_memory = []
         self.trajectory_cache = []
         self.memory_idx = 0
-        self.hidden_state_idx = 0
         self.current_trajectory = []
         self.burn_in_trajectory = []
         self.collecting_burn_in = True
@@ -76,7 +75,7 @@ class SAR_NStepReturn_RankPriority_MemoryBuffer(object):
         if self._burn_in_len > 0 and len(self.burn_in_trajectory) < self._burn_in_len:
             self.burn_in_trajectory.append(self.memory_idx)
             if len(self.burn_in_trajectory) == 1: # store hidden states for burn-in trajectory unroll
-                 self.__store_hidden_state(actor_hidden_state)
+                 self.actor_hidden_states_memory.append(actor_hidden_state)
             if len(self.burn_in_trajectory) == self._burn_in_len: # save burn-in trajectory and begin collecting training trajectory
                 self.__store_burn_in(self.burn_in_trajectory) # don't clear collected trajectory here                
                 self.current_trajectory.append(self.memory_idx) # last burn-in trajectory record is first one of training trajectory
@@ -97,7 +96,7 @@ class SAR_NStepReturn_RankPriority_MemoryBuffer(object):
                 # Only trajectory store contains correct number of records
                 for _ in range(redundant_records_count):
                     self.burn_in_memory.pop()
-                    self.hidden_state_idx -= 1
+                    self.actor_hidden_states_memory.pop()
                 self.reset()
                 return
         self.memory_idx += 1
@@ -108,8 +107,8 @@ class SAR_NStepReturn_RankPriority_MemoryBuffer(object):
     def reset(self):
         if self._distributed_mode: # in distribured mode (for APE-X or R2D2) memory completly cleared after every episode
             self.burn_in_memory.clear()
-            self.hidden_state_idx = 0
             self.trajectory_cache.clear()
+            self.actor_hidden_states_memory.clear()
         self.current_trajectory.clear()
         self.burn_in_trajectory.clear()
         self.collecting_burn_in = True
@@ -133,10 +132,6 @@ class SAR_NStepReturn_RankPriority_MemoryBuffer(object):
             burn_in_trajectory.append(tf.convert_to_tensor(self.states_memory[idx], dtype=tf.float32))
         self.burn_in_memory.append(burn_in_trajectory)
 
-    def __store_hidden_state(self, hidden_state):
-        self.actor_hidden_states_memory[self.hidden_state_idx] = hidden_state
-        self.hidden_state_idx+=1
-
     def __cache(self, trajectory):
         states_idxs = trajectory[:-1]
         assert len(states_idxs) > 0, "Bad trajectory. \"states_idxs\" length=0 when caching trajectory"
@@ -148,11 +143,6 @@ class SAR_NStepReturn_RankPriority_MemoryBuffer(object):
         rewards_ = tf.stack(self.rewards_memory[trajectory_idxs])
         gps_ = tf.stack(self.gamma_power_memory[trajectory_idxs])
         dones_ = tf.stack(self.dones_memory[trajectory_idxs])
-        # if len(trajectory_idxs) == 1: # need to expand dims for non-states data, otherwise concatination ops will fail
-        #     actions_ = tf.expand_dims(actions_, axis=0)
-        #     rewards_ = tf.expand_dims(rewards_, axis=0)
-        #     gps_ = tf.expand_dims(gps_, axis=0)
-        #     dones_ = tf.expand_dims(dones_, axis=0)
         self.trajectory_cache.append((states_, actions_, next_states_, rewards_, gps_, dones_))
         # importanse sampling 
         container = rank_container(len(self.trajectory_cache) - 1, self.td_max)
