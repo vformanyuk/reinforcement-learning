@@ -218,7 +218,7 @@ def soft_update_models():
 
 @tf.function(experimental_relax_shapes=True)
 def actor_burn_in(states, hx0, trajectory_length):
-    hx = tf.expand_dims(hx0, axis=0)
+    hx=hx0 # hx = tf.expand_dims(hx0, axis=0)
     for s in states:
         _, __, hx = actor([tf.expand_dims(s, axis = 0), hx], training=False)
     return tf.tile(hx, [trajectory_length, 1])
