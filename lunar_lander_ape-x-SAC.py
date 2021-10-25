@@ -31,7 +31,7 @@ if __name__ == '__main__':
                 orchestrator_log(f'Got actor {cmd[1]} command {cmd[0]}')
                 if cmd[0] == 0:
                     with net_sync_obj:
-                        actor_weight_pipes[cmd[1]][1].send([actor.get_weights(), critic1.get_weights(), critic1.get_weights(), alpha_log])
+                        actor_weight_pipes[cmd[1]][1].send([actor.get_weights(), critic1.get_weights(), critic2.get_weights(), alpha_log])
                     orchestrator_log(f'Sent target weights for actor {cmd[1]}')
                     continue
                 if cmd[0] == 1:
