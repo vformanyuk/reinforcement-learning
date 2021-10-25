@@ -60,6 +60,7 @@ class Learner(object):
 
         self.alpha_log = tf.Variable(0.5, dtype = tf.float32, trainable=True)
         self.target_entropy = -2
+        actor_recurrent_layer_size = 256
 
         self.actor_network_file = "r2d2-sac-learner-actor.h5"
         self.critic1_network_file = "r2d2-sac-learner-critic1.h5"
@@ -71,30 +72,30 @@ class Learner(object):
             self.actor = keras.models.load_model(self.actor_network_file)
             print("Actor Model restored from checkpoint.")
         else:
-            self.actor = policy_network(state_space_shape[0], action_space_shape[0])
+            self.actor = policy_network(state_space_shape, action_space_shape[0], actor_recurrent_layer_size)
 
         if os.path.isfile(self.critic1_network_file):
             self.critic1 = keras.models.load_model(self.critic1_network_file)
             print("Critic Model restored from checkpoint.")
         else:
-            self.critic1 = critic_network(state_space_shape[0], action_space_shape[0])
+            self.critic1 = critic_network(state_space_shape, action_space_shape[0], actor_recurrent_layer_size)
         if os.path.isfile(self.target_critic1_network_file):
             self.target_critic1 = keras.models.load_model(self.target_critic1_network_file)
             print("Target Critic Model restored from checkpoint.")
         else:
-            self.target_critic1 = critic_network(state_space_shape[0], action_space_shape[0])
+            self.target_critic1 = critic_network(state_space_shape, action_space_shape[0], actor_recurrent_layer_size)
             self.target_critic1.set_weights(self.critic1.get_weights())
 
         if os.path.isfile(self.critic2_network_file):
             self.critic2 = keras.models.load_model(self.critic2_network_file)
             print("Critic Model restored from checkpoint.")
         else:
-            self.critic2 = critic_network(state_space_shape[0], action_space_shape[0])
+            self.critic2 = critic_network(state_space_shape, action_space_shape[0], actor_recurrent_layer_size)
         if os.path.isfile(self.target_critic2_network_file):
             self.target_critic2 = keras.models.load_model(self.target_critic2_network_file)
             print("Target Critic Model restored from checkpoint.")
         else:
-            self.target_critic2 = critic_network(state_space_shape[0], action_space_shape[0])
+            self.target_critic2 = critic_network(state_space_shape, action_space_shape[0], actor_recurrent_layer_size)
             self.target_critic2.set_weights(self.critic2.get_weights())
 
     def interpolation_step(self, env, s0, action, stack_size=4):
@@ -165,7 +166,7 @@ class Learner(object):
             reversed_idxs.sort(reverse = True)
 
             self.cmd_pipe.send(CMD_UPDATE_PRIORITIES)
-            self.priorities_pipe.send([(idx, td_errors[idx]) for idx in reversed_idxs]) 
+            self.priorities_pipe.send([reversed_idxs, [td_errors[idx] for idx in reversed_idxs]]) 
 
             self.soft_update_models()
             
