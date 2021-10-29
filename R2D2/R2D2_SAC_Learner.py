@@ -9,6 +9,7 @@ from tensorflow import keras
 from time import sleep
 from typing import Tuple
 
+from R2D2.DTOs import LearnerTransmitionBuffer
 from R2D2.neural_networks import policy_network, critic_network
 
 CMD_SET_NETWORK_WEIGHTS = 0
@@ -24,6 +25,8 @@ class Learner(object):
         self.cancellation_token = cancellation_token
         self.training_active = training_active_flag
         self.buffer_ready_flag = buffer_ready
+
+        self.logging_enabled = True
 
         # prevent TensorFlow of allocating whole GPU memory. Must be called in every module
         gpus = tf.config.experimental.list_physical_devices('GPU')
@@ -115,6 +118,10 @@ class Learner(object):
                 result_states[j+1][i] = y
         return result_states, r, d
 
+    def log(self, msg):
+        if self.logging_enabled:
+            print(f'\t\t[Learner ({os.getpid()})]: {msg}')
+
     def validate(self):
         env = gym.make('LunarLanderContinuous-v2')
         done = False
@@ -124,6 +131,7 @@ class Learner(object):
             observation.append(state0)
 
         episodic_reward = 0
+        episode_step = 0
         actor_hx = tf.zeros(shape=(1, self.rnn_size), dtype=tf.float32)
 
         while not done:
@@ -136,8 +144,9 @@ class Learner(object):
 
             observation = next_observation
             episodic_reward += reward
+            episode_step += 1
         env.close()
-        print(f'\t\t[Learner] Validation run total reward = {episodic_reward}')
+        self.log(f'Validation run: {episode_step} steps, total reward = {episodic_reward}')
         return episodic_reward
 
     def run(self):
@@ -147,26 +156,34 @@ class Learner(object):
         while self.buffer_ready_flag.value < 1:
             sleep(1)
 
+        self.log("Training in progress")
         episode_rewards = []
         training_runs = 1
         while self.cancellation_token.value == 0:
             self.cmd_pipe.send(CMD_GET_REPLAY_DATA)
-            trajectories = self.replay_data_pipe.recv() # LearnerTransmitionBuffer
+            trajectories:LearnerTransmitionBuffer = self.replay_data_pipe.recv()
             
             td_errors = dict()
+            actor_losses = []
+            critic_losses = []
+
             # actor_h and meta_idx are single tensors. Others are mini batches of values
             for actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones, is_weights, meta_idx in trajectories:
                 actor_training_hx = self.actor_burn_in(burn_in_states, actor_h, tf.convert_to_tensor(len(rewards), dtype=tf.int32))
                 for _ in range(self.gradient_step):
                     critic1_loss, critic2_loss = self.train_critics(actor_training_hx, states, actions, next_states, rewards, gamma_powers, is_weights, dones)
+                    critic_losses.append(critic1_loss)
+                    critic_losses.append(critic2_loss)
                     actor_loss = self.train_actor(states, actor_training_hx)
+                    actor_losses.append(actor_loss)
                 td_errors[meta_idx] = self.get_trajectory_error(states, actions, next_states, rewards, gamma_powers, dones, actor_training_hx)
+            self.log(f'Critic error {np.mean(critic_losses):.4f} Actor error {np.mean(actor_losses):.4f}')
             
             reversed_idxs = list(td_errors.keys())
             reversed_idxs.sort(reverse = True)
 
             self.cmd_pipe.send(CMD_UPDATE_PRIORITIES)
-            self.priorities_pipe.send([reversed_idxs, [td_errors[idx] for idx in reversed_idxs]]) 
+            self.priorities_pipe.send((reversed_idxs, list([td_errors[idx] for idx in reversed_idxs]))) 
 
             self.soft_update_models()
             
@@ -185,10 +202,10 @@ class Learner(object):
                 self.critic2.save(self.critic2_network_file)
                 self.target_critic1.save(self.target_critic1_network_file)
                 self.target_critic2.save(self.target_critic2_network_file)
-                print(f'\t\t[Learner] Checkpoint saved on {training_runs} step')
+                self.log(f'Checkpoint saved on {training_runs} step')
             
             training_runs += 1
-        print('\t\t[Learner] training complete.')
+        self.log('training complete.')
     
     @tf.function(experimental_relax_shapes=True)
     def actor_burn_in(self, states, hx0, trajectory_length):

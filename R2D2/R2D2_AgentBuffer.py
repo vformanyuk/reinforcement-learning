@@ -30,6 +30,9 @@ class R2D2_AgentBuffer(object):
         for i in range(2, N + 1):
             self.gammas.append(np.power(gamma,i))
 
+    def __len__(self):
+        return len(self.trajectory_cache)
+
     def store(self, actor_hidden_state:tf.Tensor, state:tf.Tensor, action:tf.Tensor, reward:tf.Tensor, is_terminal:tf.Tensor):
         self.states_memory[self.memory_idx] = state
         self.actions_memory[self.memory_idx] = action
@@ -109,8 +112,8 @@ class R2D2_AgentBuffer(object):
 
     def get_tail(self, batch_size):
         upper_bound = len(self.trajectory_cache)
-        lower_bound = upper_bound - batch_size
-        assert lower_bound > 0, "Too few records in trajectory cache"
+        lower_bound = 0 if upper_bound == 0 else upper_bound - batch_size
+        assert lower_bound >= 0, "Too few records in trajectory cache"
         for idx in range(lower_bound, upper_bound):
             yield self.actor_hidden_states_memory[idx], \
                     self.burn_in_memory[idx], \

@@ -33,9 +33,12 @@ class R2D2_TrajectoryStore(object):
         self.ordered_storage = list()
         self.lookup = dict()
 
+    def __len__(self):
+        return len(self.trajectory_cache)
+
     def store(self, actor_hidden_state, burn_in_trajectory, trajectory, trajectory_length, td_error):
         write_idx = self.memory_idx % self.buffer_size
-        self.actor_hidden_states_memory,append(actor_hidden_state)
+        self.actor_hidden_states_memory.append(actor_hidden_state)
         self.burn_in_memory.append(burn_in_trajectory)
         self.trajectory_cache.append(trajectory)
         self.trajectory_length_memory.append(trajectory_length)

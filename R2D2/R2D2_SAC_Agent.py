@@ -1,4 +1,5 @@
 import gym
+import os
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
@@ -23,8 +24,8 @@ class Actor(object):
         self.cancelation_token = cancelation_token
         self.training_active = training_active_flag
         self.exchange_steps = 100 + np.random.randint(low=10, high=90, size=1)[0]
-        self.data_send_steps = 50
         self.gamma = gamma
+        self.q_rescaling_epsilone = tf.constant(1e-6, dtype=tf.float32)
         self.gaus_distr = tfp.distributions.Normal(0,1)
         self.stack_size = 4
         self.N = 5
@@ -34,10 +35,11 @@ class Actor(object):
         self.trajectory_n = 0.9
         self.trajectory_length = 40
         self.burn_in_length = 10
+        self.pid = os.getpid()
 
     def log(self, msg):
         if self.debug_mode:
-            print(f'[Actor {self.id}] {msg}')
+            print(f'[Actor ({self.pid}) {self.id}] {msg}')
 
     def get_target_weights(self):
         try:
@@ -55,7 +57,7 @@ class Actor(object):
     def send_replay_data(self, data:AgentTransmitionBuffer):
         try:
             self.cmd_pipe.send([1, self.id])
-            self.log(f'Replay data command sent.')
+            #self.log(f'Replay data command sent.')
             self.replay_pipe.send(data)
             self.log(f'Replay data sent.')
         except EOFError:
@@ -66,9 +68,17 @@ class Actor(object):
     def prepare_and_send_replay_data(self, exp_buffer:R2D2_AgentBuffer, batch_length:int):
         transmittion_buffer = AgentTransmitionBuffer()
         for actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones in exp_buffer.get_tail(batch_length):
-            td_errors = self.get_trajectory_error(states, actions, next_states, rewards, gamma_powers, dones, actor_h)
+            actor_hidden_state = self.actor_burn_in(states, actor_h, tf.convert_to_tensor(len(rewards)))
+            td_errors = self.get_trajectory_error(states, actions, next_states, rewards, gamma_powers, dones, actor_hidden_state)
             transmittion_buffer.append(actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones, td_errors)
         self.send_replay_data(transmittion_buffer)
+
+    @tf.function(experimental_relax_shapes=True)
+    def actor_burn_in(self, states, hx0, trajectory_length):
+        hx = hx0 # hx = tf.expand_dims(hx0, axis=0)
+        for s in states:
+            _, __, hx = self.actor([tf.expand_dims(s, axis = 0), hx], training=False)
+        return tf.tile(hx, [trajectory_length, 1])
 
     @tf.function(experimental_relax_shapes=True)
     def get_actions(self, mu, log_sigma):
@@ -82,6 +92,10 @@ class Actor(object):
         return log_probs
 
     @tf.function(experimental_relax_shapes=True)
+    def invertible_function_rescaling(self, x):
+        return tf.sign(x)*(tf.sqrt(tf.abs(x) + 1) - 1) + self.q_rescaling_epsilone * x
+
+    @tf.function(experimental_relax_shapes=True)
     def get_trajectory_error(self, states, actions, next_states, rewards, gamma_powers, dones, hidden_rnn_states):
         mu, log_sigma, ___ = self.actor([next_states, hidden_rnn_states], training=False)
         mu = tf.squeeze(mu)
@@ -92,9 +106,12 @@ class Actor(object):
         if len(next_actions_shape)  < 2:
             next_actions = tf.expand_dims(next_actions, axis=0)
         
-        target_q = tf.math.minimum(self.critic_1([next_states, next_actions], training=False), \
-                                   self.critic_2([next_states, next_actions], training=False))
-        target_q = rewards + tf.math.pow(self.gamma, gamma_powers + 1) * (1 - dones) * tf.squeeze(target_q, axis=1)
+        next_q = tf.math.minimum(self.critic_1([next_states, next_actions], training=False), \
+                                 self.critic_2([next_states, next_actions], training=False))
+
+        inverse_q_rescaling = tf.math.pow(self.invertible_function_rescaling(tf.squeeze(next_q, axis=1)), -1)
+        target_q = rewards + tf.math.pow(self.gamma, gamma_powers + 1) * (1 - dones) * inverse_q_rescaling
+        target_q = self.invertible_function_rescaling(target_q)
 
         current_q = tf.math.minimum(self.critic_1([states, actions], training=False), \
                                     self.critic_2([states, actions], training=False))
@@ -156,6 +173,7 @@ class Actor(object):
                 observation.append(state0)
 
             exp_buffer.reset()
+            actor_hx = tf.zeros(shape=(1, actor_recurrent_layer_size), dtype=tf.float32)
 
             episodic_reward = 0
             epoch_steps = 0
@@ -170,8 +188,8 @@ class Actor(object):
 
                 exp_buffer.store(actor_hx, observation, [throttle_action, eng_ctrl_action], reward, float(done))
 
-                if (epoch_steps % (self.data_send_steps + self.N) == 0 and epoch_steps > 0) or done:
-                    self.prepare_and_send_replay_data(exp_buffer, self.data_send_steps)
+                if (epoch_steps % (self.trajectory_length + self.burn_in_length + self.N) == 0 and len(exp_buffer) > 0) or done:
+                    self.prepare_and_send_replay_data(exp_buffer, 1)
 
                 if global_step % self.exchange_steps == 0 and self.training_active.value > 0: # update target networks every 'exchange_steps'
                     self.get_target_weights()
@@ -183,7 +201,7 @@ class Actor(object):
 
             rewards_history.append(episodic_reward)
             last_mean = np.mean(rewards_history[-100:])
-            print(f'[{self.id} {i} ({epoch_steps})] Total reward: {episodic_reward} Mean(100)={last_mean:.4f}')
+            self.log(f'[{i} ({epoch_steps})] Total reward: {episodic_reward} Mean(100)={last_mean:.4f}')
             if last_mean > 200:
                 self.actor.save(f'lunar_lander_R2D2_{self.id}.h5')
                 break

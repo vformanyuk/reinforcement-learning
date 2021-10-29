@@ -1,4 +1,5 @@
 import gym
+import os
 import numpy as np
 import tensorflow as tf
 from time import sleep
@@ -25,7 +26,7 @@ if __name__ == '__main__':
 
     def orchestrator_log(msg):
         if orchestrator_debug_mode:
-            print(f'[Orchestrator] {msg}')
+            print(f'[Orchestrator ({os.getpid()})] {msg}')
 
     def actor_cmd_processor(actor, critic1, critic2, replay_buffer:R2D2_TrajectoryStore, \
                             cmd_pipe, actor_weight_pipes, replay_data_pipes, net_sync_obj, data_sync_obj):
@@ -41,7 +42,7 @@ if __name__ == '__main__':
                     orchestrator_log(f'Sent target weights for actor {cmd[1]}')
                     continue
                 if cmd[0] == ACTOR_CMD_SEND_REPLAY_DATA: # actor sends replay data
-                    replay_data = replay_data_pipes[cmd[1]][0].recv() # AgentTransmitionBuffer recieved 
+                    replay_data:AgentTransmitionBuffer = replay_data_pipes[cmd[1]][0].recv() # AgentTransmitionBuffer recieved 
                     with data_sync_obj:
                         for actor_hidden_state, burn_in, states, actions, next_states, rewards, gammas, dones, td_error in replay_data:
                             # store whole trajectory along with burn-in, actor hidden state and td_error
@@ -93,8 +94,8 @@ if __name__ == '__main__':
                 if cmd == LEARNER_CMD_UPDATE_PRIORITIES: # update priorities
                     data = priorities_pipe.recv()
                     with data_sync_obj:
-                        for r in data:
-                            replay_buffer.update_priorities(r[0], r[1])
+                        replay_buffer.update_priorities(data[0], data[1])
+                    orchestrator_log(f'Updated trajectory priorities recieved')
                     continue
             except EOFError:
                 print("Connection closed.")
@@ -109,7 +110,7 @@ if __name__ == '__main__':
 
     env = gym.make('LunarLanderContinuous-v2')
 
-    trajectories_mini_batch = 16
+    trajectories_mini_batch = 64
 
     actor_learning_rate = 3e-4
     critic_learning_rate = 3e-4
@@ -167,7 +168,7 @@ if __name__ == '__main__':
 
     # 1. Init networks at learner
     learner_process = Process(target=RunLearner, args=(trajectories_mini_batch, gamma, actor_learning_rate, critic_learning_rate, \
-                                    state_space_shape, (outputs_count,), \
+                                    state_space_shape, (outputs_count,), actor_recurrent_layer_size, \
                                     learner_cmd_write_pipe, learner_weights_write_pipe, learner_replay_data_read_pipe, learner_priorities_write_pipe, \
                                     cancelation_token, training_active_flag, buffer_ready))
     learner_process.start()
@@ -187,7 +188,7 @@ if __name__ == '__main__':
         actor_processess.append(p)
         p.start()
 
-    print("Awaiting buffer fill up")
+    orchestrator_log("Awaiting buffer fill up")
     # 3. Fill up replay buffer
     while len(exp_buffer) < 10 * trajectories_mini_batch:
         sleep(1)

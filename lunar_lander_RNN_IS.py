@@ -5,6 +5,7 @@ import tensorflow_probability as tfp
 
 from datetime import datetime
 from tensorflow import keras
+from rl_utils.LearningRateDecayScheduler import LearningRateDecay
 from rl_utils.SAR_RNN_NReturn_RankPriority_MemoryBuffer import SAR_NStepReturn_RankPriority_MemoryBuffer
 
 # prevent TensorFlow of allocating whole GPU memory
@@ -12,8 +13,8 @@ gpus = tf.config.experimental.list_physical_devices('GPU')
 tf.config.experimental.set_memory_growth(gpus[0], True)
 
 stack_size = 4
-burn_in_length = 10
-trajectory_length = 40
+burn_in_length = 28
+trajectory_length = 100
 
 actor_recurrent_layer_size = 256
 critic_recurrent_layer_size = 256
@@ -22,14 +23,16 @@ env = gym.make('LunarLanderContinuous-v2')
 state_space_shape = (stack_size, env.observation_space.shape[0])
 outputs_count = env.action_space.shape[0]
 
-batch_size = 64
+batch_size = 2 #64
 num_episodes = 5000
-actor_learning_rate = 3e-4
-critic_learning_rate = 3e-4
+# actor_learning_rate = 3e-4
+# critic_learning_rate = 3e-4
+learning_rate = 1e-4
 alpha_learning_rate = 3e-4
+q_rescaling_epsilone = tf.constant(1e-6, dtype=tf.float32)
 gamma = 0.99
 tau = 0.005
-gradient_step = 2
+gradient_step = 4
 log_std_min=-20
 log_std_max=2
 action_bounds_epsilon=1e-6
@@ -43,8 +46,10 @@ checkpoint_step = 500
 max_epoch_steps = 1000
 global_step = 0
 
-actor_optimizer = tf.keras.optimizers.Adam(actor_learning_rate)
-critic_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
+lr_scheduler = LearningRateDecay(learning_rate)
+actor_optimizer = tf.keras.optimizers.Adam(lr_scheduler)
+critic_optimizer = tf.keras.optimizers.Adam(lr_scheduler)
+
 alpha_optimizer = tf.keras.optimizers.Adam(alpha_learning_rate)
 mse_loss = tf.keras.losses.MeanSquaredError()
 
@@ -177,6 +182,10 @@ def train_actor(states, hidden_rnn_states):
     return actor_loss
 
 @tf.function(experimental_relax_shapes=True)
+def invertible_function_rescaling(self, x):
+    return tf.sign(x)*(tf.sqrt(tf.abs(x) + 1) - 1) + q_rescaling_epsilone * x
+
+@tf.function(experimental_relax_shapes=True)
 def get_trajectory_error(states, actions, next_states, rewards, gamma_powers, dones, hidden_rnn_states):
     mu, log_sigma, ___ = actor([next_states, hidden_rnn_states], training=False)
     mu = tf.squeeze(mu)
@@ -187,9 +196,20 @@ def get_trajectory_error(states, actions, next_states, rewards, gamma_powers, do
     if len(next_actions_shape)  < 2:
         next_actions = tf.expand_dims(next_actions, axis=0)
     
+    # Originally it was target_critic
     target_q = tf.math.minimum(critic_1([next_states, next_actions], training=False), \
                                critic_2([next_states, next_actions], training=False))
-    target_q = rewards + tf.math.pow(gamma, gamma_powers + 1) * (1 - dones) * tf.squeeze(target_q, axis=1)
+
+    # Vanila td_error calculation way.
+    # sigma = tf.math.exp(log_sigma)
+    # log_probs = get_log_probs(mu, sigma, next_actions)
+    # next_values = target_q - tf.math.exp(alpha_log) * log_probs
+    # target_q = rewards + tf.pow(gamma, gamma_powers) * (1 - dones) * next_values
+
+    # Simplified td_error calculation way. Tend to stuck in local minima
+    inverse_q_rescaling = tf.math.pow(invertible_function_rescaling(tf.squeeze(target_q, axis=1)), -1)
+    target_q = rewards + tf.math.pow(gamma, gamma_powers + 1) * (1 - dones) * inverse_q_rescaling
+    target_q = invertible_function_rescaling(target_q)
 
     current_q = tf.math.minimum(critic_1([states, actions], training=False), \
                                 critic_2([states, actions], training=False))
@@ -218,7 +238,7 @@ def soft_update_models():
 
 @tf.function(experimental_relax_shapes=True)
 def actor_burn_in(states, hx0, trajectory_length):
-    hx=hx0 # hx = tf.expand_dims(hx0, axis=0)
+    hx = hx0 # hx = tf.expand_dims(hx0, axis=0)
     for s in states:
         _, __, hx = actor([tf.expand_dims(s, axis = 0), hx], training=False)
     return tf.tile(hx, [trajectory_length, 1])
@@ -279,7 +299,7 @@ for i in range(num_episodes):
 
         exp_buffer.store(actor_hx, observation, [throttle_action, eng_ctrl_action], reward, float(done))
 
-        if exp_buffer.get_trajectories_count() > 2*batch_size:
+        if len(exp_buffer) > burn_in_length:
             td_errors = dict()
             meta_idxs = list()
             # get one trajectory at a time
@@ -305,6 +325,9 @@ for i in range(num_episodes):
 
     rewards_history.append(episodic_reward)
     last_mean = np.mean(rewards_history[-100:])
+    if episodic_reward > 50 and epoch_steps < 900:
+        lr_scheduler.decay()
+
     delta_time = datetime.now() - start_time
     episode_minutes = int(delta_time.seconds / 60)
     episode_seconds = delta_time.seconds - episode_minutes * 60

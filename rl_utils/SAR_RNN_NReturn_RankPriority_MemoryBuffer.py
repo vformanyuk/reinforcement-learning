@@ -101,7 +101,7 @@ class SAR_NStepReturn_RankPriority_MemoryBuffer(object):
                 return
         self.memory_idx += 1
 
-    def get_trajectories_count(self):
+    def __len__(self):
         return len(self.trajectory_cache)
 
     def reset(self):
