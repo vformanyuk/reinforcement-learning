@@ -13,8 +13,9 @@ class Actor(object):
     def __init__(self, id:int, gamma:float,
                  cmd_pipe:mp.Pipe, weights_pipe:mp.Pipe, replay_pipe:mp.Pipe, cancelation_token:mp.Value, training_active_flag:mp.Value,
                  *args, **kwargs):
-        gpus = tf.config.experimental.list_physical_devices('GPU')
-        tf.config.experimental.set_memory_growth(gpus[0], True)
+        # gpus = tf.config.experimental.list_physical_devices('GPU')
+        # tf.config.experimental.set_memory_growth(gpus[0], True)
+        tf.config.set_visible_devices([], 'GPU') # run actors on CPU
 
         self.debug_mode = False
         self.id = id

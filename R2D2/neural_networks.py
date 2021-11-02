@@ -14,11 +14,11 @@ def policy_network(state_space_shape, outputs_count, actor_recurrent_layer_size)
     mean_output = keras.layers.Dense(outputs_count, activation='linear',
                                 kernel_initializer = keras.initializers.RandomUniform(minval=-SAC_INITIALIZER_BOUNDS, maxval=SAC_INITIALIZER_BOUNDS, seed=RND_SEED),
                                 bias_initializer = keras.initializers.RandomUniform(minval=-SAC_INITIALIZER_BOUNDS, maxval=SAC_INITIALIZER_BOUNDS, seed=RND_SEED))(x)
-    log_std_dev_output = keras.layers.Dense(outputs_count, activation='linear',
+    log_sigma_output = keras.layers.Dense(outputs_count, activation='linear',
                                 kernel_initializer = keras.initializers.RandomUniform(minval=-SAC_INITIALIZER_BOUNDS, maxval=SAC_INITIALIZER_BOUNDS, seed=RND_SEED),
                                 bias_initializer = keras.initializers.RandomUniform(minval=-SAC_INITIALIZER_BOUNDS, maxval=SAC_INITIALIZER_BOUNDS, seed=RND_SEED))(x)
 
-    model = keras.Model(inputs=[input, hidden_input], outputs=[mean_output, log_std_dev_output, hx])
+    model = keras.Model(inputs=[input, hidden_input], outputs=[mean_output, log_sigma_output, hx])
     return model
 
 def critic_network(state_space_shape, outputs_count, actor_recurrent_layer_size):

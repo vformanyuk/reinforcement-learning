@@ -32,6 +32,8 @@ class R2D2_TrajectoryStore(object):
         self.max_is_weight = 1
         self.ordered_storage = list()
         self.lookup = dict()
+        self.store_counter = 0
+        self.store_threshold = 500
 
     def __len__(self):
         return len(self.trajectory_cache)
@@ -42,9 +44,16 @@ class R2D2_TrajectoryStore(object):
         self.burn_in_memory.append(burn_in_trajectory)
         self.trajectory_cache.append(trajectory)
         self.trajectory_length_memory.append(trajectory_length)
-        container = rank_container(write_idx, td_error)
-        self.ordered_storage.append(container) #keep high error records in the end of array
-        self.lookup[write_idx] = container
+        if self.memory_idx >= self.buffer_size:
+            self.lookup[write_idx].td_error = td_error
+            self.store_counter += 1
+            if self.store_counter >= self.store_threshold:
+                self.ordered_storage.sort()
+                self.store_counter = 0
+        else:
+            container = rank_container(write_idx, td_error)
+            bs.insort_right(self.ordered_storage, container)
+            self.lookup[write_idx] = container
         self.memory_idx += 1
 
     def get_trajectories_count(self):

@@ -24,8 +24,8 @@ if __name__ == '__main__':
     orchestrator_debug_mode = False
     networks_initialized = False
 
-    def orchestrator_log(msg):
-        if orchestrator_debug_mode:
+    def orchestrator_log(msg, force:bool = False):
+        if orchestrator_debug_mode or force:
             print(f'[Orchestrator ({os.getpid()})] {msg}')
 
     def actor_cmd_processor(actor, critic1, critic2, replay_buffer:R2D2_TrajectoryStore, \
@@ -110,13 +110,13 @@ if __name__ == '__main__':
 
     env = gym.make('LunarLanderContinuous-v2')
 
-    trajectories_mini_batch = 64
+    trajectories_mini_batch = 128
 
     actor_learning_rate = 3e-4
     critic_learning_rate = 3e-4
     gamma = 0.99
 
-    actors_count = 2
+    actors_count = 8
     
     stack_size = 4
     state_space_shape = (stack_size, env.observation_space.shape[0])
@@ -188,10 +188,14 @@ if __name__ == '__main__':
         actor_processess.append(p)
         p.start()
 
-    orchestrator_log("Awaiting buffer fill up")
+    orchestrator_log("Awaiting buffer fill up", force=True)
     # 3. Fill up replay buffer
+    waiting_counter = 1
     while len(exp_buffer) < 10 * trajectories_mini_batch:
         sleep(1)
+        if waiting_counter % 60 == 0:
+            orchestrator_log(f'Current buffer size = {len(exp_buffer)}', force=True)
+        waiting_counter += 1
 
     # 4. Start learning
     buffer_ready.value = 1

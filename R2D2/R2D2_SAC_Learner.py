@@ -9,6 +9,7 @@ from tensorflow import keras
 from time import sleep
 from typing import Tuple
 
+from R2D2.LearningRateDecayScheduler import LearningRateDecay
 from R2D2.DTOs import LearnerTransmitionBuffer
 from R2D2.neural_networks import policy_network, critic_network
 
@@ -35,9 +36,11 @@ class Learner(object):
         self.batch_size = batch_size
         self.gamma = gamma
         self.tau = 0.005
-        self.gradient_step = 1
+        self.gradient_step = 2
         self.finish_criteria = 200
-        self.checkpoint_step = 100
+        self.checkpoint_step = 10 * self.batch_size
+        self.validation_step = 3 * self.batch_size
+        self.networks_transmite_step = 5 * self.batch_size
         self.rnn_size = recurrent_layer_size
         self.stack_size = 4
         self.trajectory_n = 0.9
@@ -54,8 +57,11 @@ class Learner(object):
         tf.random.set_seed(RND_SEED)
         np.random.random(RND_SEED)
 
-        self.actor_optimizer = tf.keras.optimizers.Adam(actor_learning_rate)
-        self.critic_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
+        self.actor_lr_scheduler = LearningRateDecay(actor_learning_rate)
+        self.critic_lr_scheduler = LearningRateDecay(critic_learning_rate)
+
+        self.actor_optimizer = tf.keras.optimizers.Adam(self.actor_lr_scheduler)
+        self.critic_optimizer = tf.keras.optimizers.Adam(self.critic_lr_scheduler)
         self.alpha_optimizer = tf.keras.optimizers.Adam(3e-4)
         self.mse_loss = tf.keras.losses.MeanSquaredError()
 
@@ -133,11 +139,17 @@ class Learner(object):
         episodic_reward = 0
         episode_step = 0
         actor_hx = tf.zeros(shape=(1, self.rnn_size), dtype=tf.float32)
+        sqrt_two_p_e = np.sqrt(2* np.pi * np.e)
+        throttle_e = []
+        ctrl_e = []
 
         while not done:
-            mean, log_std_dev, actor_hx = self.actor([np.expand_dims(observation, axis = 0), actor_hx], training=False)
-            throttle_action = self.get_actions(mean[0][0], log_std_dev[0][0])
-            eng_ctrl_action = self.get_actions(mean[0][1], log_std_dev[0][1])
+            mean, log_sigma, actor_hx = self.actor([np.expand_dims(observation, axis = 0), actor_hx], training=False)
+            throttle_action = self.get_actions(mean[0][0], log_sigma[0][0])
+            eng_ctrl_action = self.get_actions(mean[0][1], log_sigma[0][1])
+
+            throttle_e.append(np.log(sqrt_two_p_e * np.exp(log_sigma[0][0])))
+            ctrl_e.append(np.log(sqrt_two_p_e * np.exp(log_sigma[0][1])))
 
             next_observation, reward, done = self.interpolation_step(env, state0, [throttle_action, eng_ctrl_action], self.stack_size)
             state0 = next_observation[-1:][0]
@@ -146,7 +158,10 @@ class Learner(object):
             episodic_reward += reward
             episode_step += 1
         env.close()
-        self.log(f'Validation run: {episode_step} steps, total reward = {episodic_reward}')
+        if episodic_reward > 0:
+            self.actor_lr_scheduler.decay()
+            self.critic_lr_scheduler.decay()
+        self.log(f'Validation run: {episode_step} steps, total reward = {episodic_reward}, throttle_e = {np.mean(throttle_e):.4f}, ctrl_e = {np.mean(ctrl_e):.4f}')
         return episodic_reward
 
     def run(self):
@@ -158,7 +173,7 @@ class Learner(object):
 
         self.log("Training in progress")
         episode_rewards = []
-        training_runs = 1
+        training_runs = 0
         while self.cancellation_token.value == 0:
             self.cmd_pipe.send(CMD_GET_REPLAY_DATA)
             trajectories:LearnerTransmitionBuffer = self.replay_data_pipe.recv()
@@ -176,7 +191,10 @@ class Learner(object):
                     critic_losses.append(critic2_loss)
                     actor_loss = self.train_actor(states, actor_training_hx)
                     actor_losses.append(actor_loss)
+                training_runs += 1
                 td_errors[meta_idx] = self.get_trajectory_error(states, actions, next_states, rewards, gamma_powers, dones, actor_training_hx)
+                if training_runs % 10 == 0:
+                    self.soft_update_models()
             self.log(f'Critic error {np.mean(critic_losses):.4f} Actor error {np.mean(actor_losses):.4f}')
             
             reversed_idxs = list(td_errors.keys())
@@ -185,15 +203,13 @@ class Learner(object):
             self.cmd_pipe.send(CMD_UPDATE_PRIORITIES)
             self.priorities_pipe.send((reversed_idxs, list([td_errors[idx] for idx in reversed_idxs]))) 
 
-            self.soft_update_models()
-            
             if self.training_active.value == 0:
                 self.training_active.value = 1
-            if training_runs % 20 == 0:
+            if training_runs % self.validation_step == 0:
                 episode_rewards.append(self.validate())
                 if np.mean(episode_rewards[-100:]) >= self.finish_criteria:
                     self.cancellation_token.value = 1
-            if training_runs % 10 == 0:
+            if training_runs % self.networks_transmite_step == 0:
                 self.cmd_pipe.send(CMD_SET_NETWORK_WEIGHTS)
                 self.weights_pipe.send([self.actor.get_weights(), self.critic1.get_weights(), self.critic2.get_weights(), self.alpha_log])
             if training_runs % self.checkpoint_step == 0:
@@ -204,7 +220,6 @@ class Learner(object):
                 self.target_critic2.save(self.target_critic2_network_file)
                 self.log(f'Checkpoint saved on {training_runs} step')
             
-            training_runs += 1
         self.log('training complete.')
     
     @tf.function(experimental_relax_shapes=True)
