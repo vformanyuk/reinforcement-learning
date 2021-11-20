@@ -72,14 +72,9 @@ class R2D2_TrajectoryStore(object):
         return np.exp(np.log((interval_len*interval_idx - self.gamma_s)*(1-self.alpha) + 1) / (1-self.alpha))
 
     def update_priorities(self, meta_idxs, td_errors):
-        to_remove = []
-        # because indexes are fetched in reversed way, items are poped from the end and thus array indexes of preciding items are not affected
-        for idx in meta_idxs:
-            to_remove.append(self.ordered_storage.pop(idx))
-        for container, err in zip(to_remove, np.abs(td_errors)):
-            if err > self.td_max:
-                self.td_max = err
-            bs.insort_right(self.ordered_storage, rank_container(container.replay_buffer_idx, err))
+        for idx, err in zip(meta_idxs, td_errors):
+            self.lookup[idx].td_error = err
+        self.ordered_storage.sort()
 
     def sample(self, batch_size):
         idxs = list()
@@ -111,4 +106,4 @@ class R2D2_TrajectoryStore(object):
                     self.burn_in_memory[idx], \
                     self.trajectory_cache[idx], \
                     tf.fill(dims=[self.trajectory_length_memory[idx]], value=normalized_IS_weight), \
-                    idx
+                    idx # return index in replay buffer, not ordered storage
