@@ -1,45 +1,52 @@
 import gym
-import numpy as np
 import os
+import numpy as np
 import tensorflow as tf
-from tensorflow import keras
 from time import sleep
 
-from APEX.APEX_Rank_Priority_MemoryBuffer import APEX_Rank_Priority_MemoryBuffer
-from APEX.neural_networks import sac_policy_network, sac_critic_network
-from APEX.sac_actor import RunActor
-from APEX.sac_learner import RunLearner
+from R2D2.R2D2_TrajectoryStore import R2D2_TrajectoryStore
+from R2D2.neural_networks import policy_network, critic_network
+from R2D2.R2D2_SAC_Agent import RunActor
+from R2D2.R2D2_SAC_Learner import RunLearner
+from R2D2.DTOs import AgentTransmitionBuffer, LearnerTransmitionBuffer
 
 from multiprocessing import Process, Pipe, Value
 from threading import Thread, Lock
 
+LEARNER_CMD_SET_NETWORK_WEIGHTS = 0
+LEARNER_CMD_GET_REPLAY_DATA = 1
+LEARNER_CMD_UPDATE_PRIORITIES = 2
+
+ACTOR_CMD_GET_NETWORKS = 0
+ACTOR_CMD_SEND_REPLAY_DATA = 1
+
 if __name__ == '__main__':
     orchestrator_debug_mode = False
-
     networks_initialized = False
 
-    def orchestrator_log(msg):
-        if orchestrator_debug_mode:
-            print(f'[Orchestrator] {msg}')
+    def orchestrator_log(msg, force:bool = False):
+        if orchestrator_debug_mode or force:
+            print(f'[Orchestrator ({os.getpid()})] {msg}')
 
-    def actor_cmd_processor(actor, critic1, critic2, replay_buffer, cmd_pipe, actor_weight_pipes, replay_data_pipes, net_sync_obj, data_sync_obj):
+    def actor_cmd_processor(actor, critic1, critic2, replay_buffer:R2D2_TrajectoryStore, \
+                            cmd_pipe, actor_weight_pipes, replay_data_pipes, net_sync_obj, data_sync_obj):
         global alpha_log
         connection_alive = True
         while connection_alive:
             try:
                 cmd = cmd_pipe.recv()
                 orchestrator_log(f'Got actor {cmd[1]} command {cmd[0]}')
-                if cmd[0] == 0:
+                if cmd[0] == ACTOR_CMD_GET_NETWORKS: # actor requested networks update
                     with net_sync_obj:
-                        actor_weight_pipes[cmd[1]][1].send([actor.get_weights(), critic1.get_weights(), critic2.get_weights(), alpha_log])
+                        actor_weight_pipes[cmd[1]][1].send([actor.get_weights(), critic1.get_weights(), critic2.get_weights()])
                     orchestrator_log(f'Sent target weights for actor {cmd[1]}')
                     continue
-                if cmd[0] == 1:
-                    replay_data = replay_data_pipes[cmd[1]][0].recv()
+                if cmd[0] == ACTOR_CMD_SEND_REPLAY_DATA: # actor sends replay data
+                    replay_data:AgentTransmitionBuffer = replay_data_pipes[cmd[1]][0].recv() # AgentTransmitionBuffer recieved 
                     with data_sync_obj:
-                        for r in replay_data:
-                            # state, action, next_state, reward, gamma_power, done, td_error
-                            replay_buffer.store(r[0], r[1], r[2], r[3], r[4], r[5], r[6])
+                        for actor_hidden_state, burn_in, states, actions, next_states, rewards, gammas, dones, td_error in replay_data:
+                            # store whole trajectory along with burn-in, actor hidden state and td_error
+                            replay_buffer.store(actor_hidden_state, burn_in, [states, actions, next_states, rewards, gammas, dones], len(rewards), td_error)
                     orchestrator_log(f'Got replay data from actor {cmd[1]}')
                     continue
             except EOFError:
@@ -49,7 +56,8 @@ if __name__ == '__main__':
                 print('Handle closed.')
                 connection_alive = False
 
-    def learner_cmd_processor(actor, critic1, critic2, replay_buffer, cmd_pipe, learner_weights_pipe, replay_data_pipe, priorities_pipe, net_sync_obj, data_sync_obj):
+    def learner_cmd_processor(actor, critic1, critic2, replay_buffer:R2D2_TrajectoryStore, \
+                             cmd_pipe, learner_weights_pipe, replay_data_pipe, priorities_pipe, net_sync_obj, data_sync_obj):
         global networks_initialized
         global alpha_log
         connection_alive = True
@@ -57,29 +65,37 @@ if __name__ == '__main__':
             try:
                 cmd = cmd_pipe.recv()
                 orchestrator_log(f'Got learner command {cmd}')
-                if cmd == 0: # update target networks
+                if cmd == LEARNER_CMD_SET_NETWORK_WEIGHTS: # update target networks
                     weights = learner_weights_pipe.recv()
                     with net_sync_obj:
                         actor.set_weights(weights[0])
                         critic1.set_weights(weights[1])
                         critic2.set_weights(weights[2])
-                        alpha_log = float(weights[3])
                         networks_initialized = True
                     orchestrator_log(f'Target networks are updated')
                     continue
-                if cmd == 1: # fetch N batches of data
-                    data = []
+                if cmd == LEARNER_CMD_GET_REPLAY_DATA: # fetch mini batch of trajectories for learner
+                    data = LearnerTransmitionBuffer()
                     with data_sync_obj:
-                        for _ in range(learner_prefetch_batches):
-                            data.append([*replay_buffer()])
+                        for actor_hidden_state, burn_in, trajectory, is_weights, meta_idx in replay_buffer.sample(trajectories_mini_batch):
+                            data.append(actor_hidden_state, 
+                                        burn_in, 
+                                        trajectory[0], 
+                                        trajectory[1], 
+                                        trajectory[2], 
+                                        trajectory[3], 
+                                        trajectory[4], 
+                                        trajectory[5], 
+                                        is_weights,
+                                        meta_idx)
                     replay_data_pipe.send(data)
-                    orchestrator_log(f'Sent {learner_prefetch_batches} batches of data to learner')
+                    orchestrator_log(f'Sent {trajectories_mini_batch} batches of data to learner')
                     continue
-                if cmd == 2: # update priorities
+                if cmd == LEARNER_CMD_UPDATE_PRIORITIES: # update priorities
                     data = priorities_pipe.recv()
                     with data_sync_obj:
-                        for r in data:
-                            replay_buffer.update_priorities(r[0], r[1])
+                        replay_buffer.update_priorities(data[0], data[1])
+                    orchestrator_log(f'Updated trajectory priorities recieved')
                     continue
             except EOFError:
                 print("Connection closed.")
@@ -94,16 +110,23 @@ if __name__ == '__main__':
 
     env = gym.make('LunarLanderContinuous-v2')
 
-    learner_batch_size = 128
-    learner_prefetch_batches = 16
+    trajectories_mini_batch = 128
 
     actor_learning_rate = 3e-4
     critic_learning_rate = 3e-4
     gamma = 0.99
 
-    actors_count = 2
+    actors_count = 8
+    
+    stack_size = 4
+    state_space_shape = (stack_size, env.observation_space.shape[0])
+    outputs_count = env.action_space.shape[0]
+    actor_recurrent_layer_size = 256
 
-    exp_buffer = APEX_Rank_Priority_MemoryBuffer(1000000, learner_batch_size, env.observation_space.shape, env.action_space.shape)
+    trajectory_length = 100
+    burn_in_length = 28
+
+    exp_buffer = R2D2_TrajectoryStore(buffer_size=1000000, alpha=0.7, beta=0.5, beta_increase_rate=1)
 
     weights_sync = Lock()
     data_sync = Lock()
@@ -119,10 +142,9 @@ if __name__ == '__main__':
     weights_distribution_pipes = []
     actor_processess = []
 
-    critic1_net = sac_critic_network((env.observation_space.shape[0]), env.action_space.shape[0])
-    critic2_net = sac_critic_network((env.observation_space.shape[0]), env.action_space.shape[0])
-    policy_net = sac_policy_network((env.observation_space.shape[0]), env.action_space.shape[0])
-    alpha_log = 0.5
+    critic1_net = critic_network(state_space_shape, outputs_count, actor_recurrent_layer_size)
+    critic2_net = critic_network(state_space_shape, outputs_count, actor_recurrent_layer_size)
+    policy_net = policy_network(state_space_shape, outputs_count, actor_recurrent_layer_size)
 
     cancelation_token = Value('i', 0)
     training_active_flag = Value('i', 0)
@@ -145,8 +167,8 @@ if __name__ == '__main__':
     learner_cmd_processor_thread.start()
 
     # 1. Init networks at learner
-    learner_process = Process(target=RunLearner, args=(learner_batch_size, gamma, actor_learning_rate, critic_learning_rate, \
-                                    (env.observation_space.shape[0],), (env.action_space.shape[0],), \
+    learner_process = Process(target=RunLearner, args=(trajectories_mini_batch, gamma, actor_learning_rate, critic_learning_rate, \
+                                    state_space_shape, (outputs_count,), actor_recurrent_layer_size, \
                                     learner_cmd_write_pipe, learner_weights_write_pipe, learner_replay_data_read_pipe, learner_priorities_write_pipe, \
                                     cancelation_token, training_active_flag, buffer_ready))
     learner_process.start()
@@ -166,10 +188,14 @@ if __name__ == '__main__':
         actor_processess.append(p)
         p.start()
 
-    print("Awaiting buffer fill up")
+    orchestrator_log("Awaiting buffer fill up", force=True)
     # 3. Fill up replay buffer
-    while len(exp_buffer) < learner_batch_size * learner_prefetch_batches:
+    waiting_counter = 1
+    while len(exp_buffer) < 10 * trajectories_mini_batch:
         sleep(1)
+        if waiting_counter % 60 == 0:
+            orchestrator_log(f'Current buffer size = {len(exp_buffer)}', force=True)
+        waiting_counter += 1
 
     # 4. Start learning
     buffer_ready.value = 1
