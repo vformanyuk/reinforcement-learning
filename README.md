@@ -26,3 +26,10 @@ It is representative and doesn't skip frames like some other envs.
   * [SAC Actor](https://github.com/vformanyuk/reinforcement-learning/blob/master/APEX/sac_actor.py)
   * [SAC Learner](https://github.com/vformanyuk/reinforcement-learning/blob/master/APEX/sac_learner.py)
 * [Curiosity based on Random Network Distillation ( with Soft Actor Critic)](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_RND_Curiosity.py)
+* Recurrent Experience Replay in Distributed Reinforcement Lerning (R2D2) with SAC. 
+Note 1: for this experiment the famous Lunar Lander environment was altered to produce 'stacked' states. This achived by adding liner interpolated states between 'state' and 'next_state'.
+Note 2: Because original paper says nothing about behavior near trajoctory end, the simples approach was taken - length of last trajectoy may vary, but is at least 2.
+  * [Orchestrator](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_SAC_R2D2.py)
+  * [Agent](https://github.com/vformanyuk/reinforcement-learning/blob/master/R2D2/R2D2_SAC_Agent.py)
+  * [Learner](https://github.com/vformanyuk/reinforcement-learning/blob/master/R2D2/R2D2_SAC_Learner.py)
+  * [Agent buffer](https://github.com/vformanyuk/reinforcement-learning/blob/master/R2D2/R2D2_AgentBuffer.py) Responsible for collecting trajectories and is important part of whole algorithm.
