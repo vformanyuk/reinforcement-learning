@@ -3,11 +3,11 @@ import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
 from tensorflow import keras
-import os
 from rl_utils.SARST_RandomAccess_MemoryBuffer import SARST_RandomAccess_MemoryBuffer
 
 # prevent TensorFlow of allocating whole GPU memory
-gpus = tf.config.experimental.list_physical_devices('GPU')
+gpus = tf.config.list_physical_devices('GPU')
+tf.config.set_visible_devices(gpus[0], 'GPU')
 tf.config.experimental.set_memory_growth(gpus[0], True)
 
 env = gym.make('LunarLanderContinuous-v2')
@@ -24,8 +24,8 @@ tau = 0.05
 gradient_step = 4
 log_std_min=-20
 log_std_max=2
-lambda_temporal = 1
-lambda_spatial = 1
+lambda_temporal_smoothness = 0.5
+lambda_spatial_smoothness = 0.05
 action_bounds_epsilon=1e-6
 target_entropy = -np.prod(env.action_space.shape)
 
@@ -164,7 +164,7 @@ def train_actor(states, next_states, sampling_noise):
         Lt = tf.math.reduce_euclidean_norm(next_actions - target_actions) # temporal smoothness regularization
         Ls = tf.math.reduce_euclidean_norm(near_actions - target_actions) # spatial smoothness regularization
 
-        actor_loss = tf.reduce_mean(alpha * log_probs - target_q) - lambda_temporal * Lt - lambda_spatial * Ls
+        actor_loss = tf.reduce_mean(alpha * log_probs - target_q) - lambda_temporal_smoothness * Lt - lambda_spatial_smoothness * Ls
         
         with tf.GradientTape() as alpha_tape:
             alpha_loss = -tf.reduce_mean(alpha_log * tf.stop_gradient(log_probs + target_entropy))
@@ -173,7 +173,7 @@ def train_actor(states, next_states, sampling_noise):
 
     gradients = tape.gradient(actor_loss, actor.trainable_variables)
     actor_optimizer.apply_gradients(zip(gradients, actor.trainable_variables))
-    return actor_loss
+    return actor_loss, Lt, Ls
 
 def soft_update_models():
     target_critic_1_weights = target_critic_1.get_weights()
@@ -212,6 +212,9 @@ for i in range(num_episodes):
     critic_loss_history = []
     actor_loss_history = []
 
+    temporal_smoothness = []
+    spatial_smoothness = []
+
     reward_history = []
 
     while not done:
@@ -233,7 +236,9 @@ for i in range(num_episodes):
                 critic_loss_history.append(critic1_loss)
                 critic_loss_history.append(critic2_loss)
             
-                actor_loss = train_actor(states, next_states, gaus_distr.sample(sample_shape=(batch_size, outputs_count)))
+                actor_loss, temporal_reg, spatial_reg = train_actor(states, next_states, gaus_distr.sample(sample_shape=(batch_size, outputs_count)))
+                spatial_smoothness.append(spatial_reg)
+                temporal_smoothness.append(temporal_reg)
                 actor_loss_history.append(actor_loss)
             soft_update_models()
 
@@ -244,11 +249,11 @@ for i in range(num_episodes):
 
     rewards_history.append(episodic_reward)
     last_mean = np.mean(rewards_history[-100:])
-    print(f"Reward info: min={np.min(reward_history):.4f} avg={np.mean(reward_history):.4f} max={np.max(reward_history):.4f}")
-    print(f'[epoch {i} ({epoch_steps})] Actor_Loss: {np.mean(actor_loss_history):.4f} Critic_Loss: {np.mean(critic_loss_history):.4f} Total reward: {episodic_reward} Mean(100)={last_mean:.4f}')
+    #print(f"Reward info: min={np.min(reward_history):.4f} avg={np.mean(reward_history):.4f} max={np.max(reward_history):.4f}")
+    print(f'[epoch {i} ({epoch_steps})] Actor_Loss: {np.mean(actor_loss_history):.4f} Lt: {np.mean(temporal_smoothness):.4f} Ls: {np.mean(spatial_smoothness):.4f} Critic_Loss: {np.mean(critic_loss_history):.4f} Total reward: {episodic_reward} Mean(100)={last_mean:.4f}')
     if last_mean > 200:
         break
 if last_mean > 200:
-    actor.save('lunar_lander_sac.h5')
+    actor.save('lunar_lander_sac_caps.h5')
 env.close()
 input("training complete...")
