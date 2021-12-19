@@ -34,5 +34,5 @@ It is representative and doesn't skip frames like some other envs.
   
   Note 1: for this experiment the famous Lunar Lander environment was altered to produce 'stacked' states. This achived by adding liner interpolated states between 'state' and 'next_state'.
 
-  Note 2: Because original paper says nothing about behavior near trajoctory end, the simples approach was taken - length of last trajectoy may vary, but is at least 2.
+  Note 2: Because original paper says nothing about behavior near trajoctory end, the simplest approach was taken - length of last trajectoy may vary, but has length of atleast 2 records.
 * [Regularizing Action Policies for Smooth Control implementation based on Soft Actor-Critic](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_SAC_CAPS.py)
