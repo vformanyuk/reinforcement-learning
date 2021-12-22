@@ -12,6 +12,7 @@ tf.config.experimental.set_memory_growth(gpus[0], True)
 
 env = gym.make('LunarLanderContinuous-v2')
 X_shape = (env.observation_space.shape[0])
+state_shape = env.observation_space.shape[0]
 outputs_count = env.action_space.shape[0]
 
 batch_size = 100
@@ -134,24 +135,20 @@ def train_critics(states, actions, next_states, rewards, dones):
     return c1_loss, c2_loss
 
 @tf.function
-def train_actor(states, next_states, sampling_noise):
+def train_actor(states, next_states):
     alpha = tf.math.exp(alpha_log)
 
-    next_mu, next_log_sigma = actor(next_states, training=True)
-    next_log_sigma = tf.clip_by_value(tf.squeeze(next_log_sigma), log_std_min, log_std_max)
-    next_actions = get_actions(tf.squeeze(next_mu), next_log_sigma, sampling_noise)
+    next_mu, _ = actor(next_states, training=False)
 
-    spatial_dist = tfp.distributions.Normal(states, 1)
-    near_states = spatial_dist.sample() # (batch_size, state_shape)
-    near_mu, near_log_sigma = actor(near_states, training=True)
-    near_log_sigma = tf.clip_by_value(tf.squeeze(near_log_sigma), log_std_min, log_std_max)
-    near_actions = get_actions(tf.squeeze(near_mu), near_log_sigma, sampling_noise)
+    near_states = gaus_distr.sample(sample_shape=(batch_size, state_shape - 2))
+    near_states = tf.pad(near_states, [[0,0],[0,2]]) # add two last columns of 0
+    near_mu, _ = actor(near_states, training=False)
 
     with tf.GradientTape() as tape:
         mu, log_sigma = actor(states, training=True)
         mu = tf.squeeze(mu)
         log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), log_std_min, log_std_max)
-        target_actions = get_actions(mu, log_sigma, sampling_noise)
+        target_actions = get_actions(mu, log_sigma)
         
         target_q = tf.math.minimum(critic_1([states, target_actions], training=False), \
                                    critic_2([states, target_actions], training=False))
@@ -161,10 +158,10 @@ def train_actor(states, next_states, sampling_noise):
         log_probs = get_log_probs(mu, sigma, target_actions)
 
         # CAPS
-        Lt = tf.math.reduce_euclidean_norm(next_actions - target_actions) # temporal smoothness regularization
-        Ls = tf.math.reduce_euclidean_norm(near_actions - target_actions) # spatial smoothness regularization
+        Lt = lambda_temporal_smoothness * tf.nn.l2_loss(next_mu - mu) / batch_size # temporal smoothness regularization
+        Ls = lambda_spatial_smoothness * tf.nn.l2_loss(near_mu - mu) / batch_size # spatial smoothness regularization
 
-        actor_loss = tf.reduce_mean(alpha * log_probs - target_q) - lambda_temporal_smoothness * Lt - lambda_spatial_smoothness * Ls
+        actor_loss = tf.reduce_mean(alpha * log_probs - target_q) + Lt + Ls
         
         with tf.GradientTape() as alpha_tape:
             alpha_loss = -tf.reduce_mean(alpha_log * tf.stop_gradient(log_probs + target_entropy))
@@ -236,7 +233,7 @@ for i in range(num_episodes):
                 critic_loss_history.append(critic1_loss)
                 critic_loss_history.append(critic2_loss)
             
-                actor_loss, temporal_reg, spatial_reg = train_actor(states, next_states, gaus_distr.sample(sample_shape=(batch_size, outputs_count)))
+                actor_loss, temporal_reg, spatial_reg = train_actor(states, next_states)
                 spatial_smoothness.append(spatial_reg)
                 temporal_smoothness.append(temporal_reg)
                 actor_loss_history.append(actor_loss)
