@@ -8,13 +8,13 @@ from tensorflow import keras
 from rl_utils.LearningRateDecayScheduler import LearningRateDecay
 from rl_utils.SAR_RNN_NReturn_RankPriority_MemoryBuffer import SAR_NStepReturn_RankPriority_MemoryBuffer
 
-gpus = tf.config.list_physical_devices('GPU')
-tf.config.set_visible_devices(gpus[0], 'GPU')
+# prevent TensorFlow of allocating whole GPU memory
+gpus = tf.config.experimental.list_physical_devices('GPU')
 tf.config.experimental.set_memory_growth(gpus[0], True)
 
 stack_size = 4
-burn_in_length = 14
-trajectory_length = 36
+burn_in_length = 28
+trajectory_length = 100
 
 actor_recurrent_layer_size = 256
 critic_recurrent_layer_size = 256
@@ -27,7 +27,7 @@ batch_size = 2 #64
 num_episodes = 5000
 # actor_learning_rate = 3e-4
 # critic_learning_rate = 3e-4
-learning_rate = 3e-4
+learning_rate = 1e-4
 alpha_learning_rate = 3e-4
 q_rescaling_epsilone = tf.constant(1e-6, dtype=tf.float32)
 gamma = 0.99
@@ -182,7 +182,7 @@ def train_actor(states, hidden_rnn_states):
     return actor_loss
 
 @tf.function(experimental_relax_shapes=True)
-def invertible_function_rescaling(x):
+def invertible_function_rescaling(self, x):
     return tf.sign(x)*(tf.sqrt(tf.abs(x) + 1) - 1) + q_rescaling_epsilone * x
 
 @tf.function(experimental_relax_shapes=True)
@@ -304,11 +304,7 @@ for i in range(num_episodes):
             meta_idxs = list()
             # get one trajectory at a time
             for actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones, is_weights, meta_idx in exp_buffer.sample(batch_size):
-                if len(burn_in_states) > 0:
-                    actor_training_hx = actor_burn_in(burn_in_states, actor_h, tf.convert_to_tensor(len(rewards), dtype=tf.int32))
-                else:
-                    # actor_training_hx = tf.zeros(shape=(len(rewards), actor_recurrent_layer_size), dtype=tf.float32)
-                    continue
+                actor_training_hx = actor_burn_in(burn_in_states, actor_h, tf.convert_to_tensor(len(rewards), dtype=tf.int32))
                 meta_idxs.append(meta_idx)
                 for _ in range(gradient_step):
                     critic1_loss, critic2_loss = train_critics(actor_training_hx, states, actions, next_states, rewards, gamma_powers, is_weights, dones)

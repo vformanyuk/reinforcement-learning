@@ -34,6 +34,7 @@ class SAR_NStepReturn_RankPriority_MemoryBuffer(object):
         self.memory_idx = 0
         self.current_trajectory = []
         self.burn_in_trajectory = []
+        self.collecting_burn_in = True
         # N-return backup
         self.N = N
         self.gammas=[]
@@ -65,10 +66,8 @@ class SAR_NStepReturn_RankPriority_MemoryBuffer(object):
             self.gamma_power_memory[self.memory_idx - n_return_idx] = n_return_idx
             n_return_idx += 1
 
-        self.current_trajectory.append(self.memory_idx)
-        if self.memory_idx == 0:
-            self.actor_hidden_states_memory.append(actor_hidden_state) # store first (zero) hidden state
-            self.__store_burn_in([]) # store empty burn-in transition
+        if not self.collecting_burn_in or self._burn_in_len == 0: # Burn-in trajectory must be filled up first if used
+            self.current_trajectory.append(self.memory_idx)
         
         if  len(self.current_trajectory) == (self._trajectory_size - self._burn_in_len):
             self.burn_in_trajectory.clear() # clear exisitng burn-in trajectory to start collecting new one
@@ -80,13 +79,14 @@ class SAR_NStepReturn_RankPriority_MemoryBuffer(object):
             if len(self.burn_in_trajectory) == self._burn_in_len: # save burn-in trajectory and begin collecting training trajectory
                 self.__store_burn_in(self.burn_in_trajectory) # don't clear collected trajectory here                
                 self.current_trajectory.append(self.memory_idx) # last burn-in trajectory record is first one of training trajectory
+                self.collecting_burn_in = False
 
         if len(self.current_trajectory) == self._trajectory_size or is_terminal > 0: # trajectory shouldn't overlap episode
             if len(self.current_trajectory) == 1: # trajectory must have at least legth of 2
                 # if current trajectory length is 1, then burn-in memeory can not contain redundant records
                 # thus, it is safe to take preciding state from burn-in to train trajectory
-                trajectory_idx = self.current_trajectory[0]
-                self.current_trajectory.insert(0, trajectory_idx - 1) #insert previous item index
+                self.current_trajectory.insert(0, self.memory_idx - 1)
+                self.burn_in_memory[-1:].pop()
             self.__cache(self.current_trajectory)
             self.current_trajectory.clear()
             if is_terminal > 0: # this part is redundant for R2D2 agent because it's reset afte each played episode
@@ -111,6 +111,7 @@ class SAR_NStepReturn_RankPriority_MemoryBuffer(object):
             self.actor_hidden_states_memory.clear()
         self.current_trajectory.clear()
         self.burn_in_trajectory.clear()
+        self.collecting_burn_in = True
         self.memory_idx = 0
 
     def __get_gamma_s(self):
