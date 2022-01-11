@@ -29,8 +29,8 @@ class Learner(object):
 
         self.logging_enabled = True
 
-        # prevent TensorFlow of allocating whole GPU memory. Must be called in every module
-        gpus = tf.config.experimental.list_physical_devices('GPU')
+        gpus = tf.config.list_physical_devices('GPU')
+        tf.config.set_visible_devices(gpus[0], 'GPU')
         tf.config.experimental.set_memory_growth(gpus[0], True)
 
         self.batch_size = batch_size
@@ -44,7 +44,6 @@ class Learner(object):
         self.rnn_size = recurrent_layer_size
         self.stack_size = 4
         self.trajectory_n = 0.9
-        self.q_rescaling_epsilone = tf.constant(1e-6, dtype=tf.float32)
 
         self.cmd_pipe = cmd_pipe
         self.weights_pipe = weights_pipe
@@ -70,7 +69,7 @@ class Learner(object):
 
         self.alpha_log = tf.Variable(0.5, dtype = tf.float32, trainable=True)
         self.target_entropy = -2
-        actor_recurrent_layer_size = 256
+        self.actor_recurrent_layer_size = 256
 
         self.actor_network_file = "r2d2-sac-learner-actor.h5"
         self.critic1_network_file = "r2d2-sac-learner-critic1.h5"
@@ -82,30 +81,30 @@ class Learner(object):
             self.actor = keras.models.load_model(self.actor_network_file)
             print("Actor Model restored from checkpoint.")
         else:
-            self.actor = policy_network(state_space_shape, action_space_shape[0], actor_recurrent_layer_size)
+            self.actor = policy_network(state_space_shape, action_space_shape[0], self.actor_recurrent_layer_size)
 
         if os.path.isfile(self.critic1_network_file):
             self.critic1 = keras.models.load_model(self.critic1_network_file)
             print("Critic Model restored from checkpoint.")
         else:
-            self.critic1 = critic_network(state_space_shape, action_space_shape[0], actor_recurrent_layer_size)
+            self.critic1 = critic_network(state_space_shape, action_space_shape[0], self.actor_recurrent_layer_size)
         if os.path.isfile(self.target_critic1_network_file):
             self.target_critic1 = keras.models.load_model(self.target_critic1_network_file)
             print("Target Critic Model restored from checkpoint.")
         else:
-            self.target_critic1 = critic_network(state_space_shape, action_space_shape[0], actor_recurrent_layer_size)
+            self.target_critic1 = critic_network(state_space_shape, action_space_shape[0], self.actor_recurrent_layer_size)
             self.target_critic1.set_weights(self.critic1.get_weights())
 
         if os.path.isfile(self.critic2_network_file):
             self.critic2 = keras.models.load_model(self.critic2_network_file)
             print("Critic Model restored from checkpoint.")
         else:
-            self.critic2 = critic_network(state_space_shape, action_space_shape[0], actor_recurrent_layer_size)
+            self.critic2 = critic_network(state_space_shape, action_space_shape[0], self.actor_recurrent_layer_size)
         if os.path.isfile(self.target_critic2_network_file):
             self.target_critic2 = keras.models.load_model(self.target_critic2_network_file)
             print("Target Critic Model restored from checkpoint.")
         else:
-            self.target_critic2 = critic_network(state_space_shape, action_space_shape[0], actor_recurrent_layer_size)
+            self.target_critic2 = critic_network(state_space_shape, action_space_shape[0], self.actor_recurrent_layer_size)
             self.target_critic2.set_weights(self.critic2.get_weights())
 
     def interpolation_step(self, env, s0, action, stack_size=4):
@@ -185,7 +184,10 @@ class Learner(object):
 
             # actor_h and meta_idx are single tensors. Others are mini batches of values
             for actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones, is_weights, meta_idx in trajectories:
-                actor_training_hx = self.actor_burn_in(burn_in_states, actor_h, tf.convert_to_tensor(len(rewards), dtype=tf.int32))
+                if len(burn_in_states) > 0:
+                    actor_training_hx = self.actor_burn_in(burn_in_states, actor_h, tf.convert_to_tensor(len(rewards), dtype=tf.int32))
+                else:
+                    actor_training_hx = tf.zeros(shape=(len(rewards), self.actor_recurrent_layer_size), dtype=tf.float32)
                 for _ in range(self.gradient_step):
                     critic1_loss, critic2_loss = self.train_critics(actor_training_hx, states, actions, next_states, rewards, gamma_powers, is_weights, dones)
                     critic_losses.append(critic1_loss)
@@ -313,10 +315,6 @@ class Learner(object):
         return actor_loss
 
     @tf.function(experimental_relax_shapes=True)
-    def invertible_function_rescaling(self, x):
-        return tf.sign(x)*(tf.sqrt(tf.abs(x) + 1) - 1) + self.q_rescaling_epsilone * x
-
-    @tf.function(experimental_relax_shapes=True)
     def get_trajectory_error(self, states, actions, next_states, rewards, gamma_powers, dones, hidden_rnn_states):
         mu, log_sigma, ___ = self.actor([next_states, hidden_rnn_states], training=False)
         mu = tf.squeeze(mu)
@@ -327,12 +325,10 @@ class Learner(object):
         if len(next_actions_shape)  < 2:
             next_actions = tf.expand_dims(next_actions, axis=0)
         
-        next_q = tf.math.minimum(self.critic1([next_states, next_actions], training=False), \
-                                 self.critic2([next_states, next_actions], training=False))
-        inverse_q_rescaling = tf.math.pow(self.invertible_function_rescaling(tf.squeeze(next_q, axis=1)), -1)
-        target_q = rewards + tf.math.pow(self.gamma, gamma_powers + 1) * (1 - dones) * inverse_q_rescaling
-        target_q = self.invertible_function_rescaling(target_q)
-        
+        target_q = tf.math.minimum(self.critic1([next_states, next_actions], training=False), \
+                                self.critic2([next_states, next_actions], training=False))
+        target_q = rewards + tf.math.pow(self.gamma, gamma_powers + 1) * (1 - dones) * tf.squeeze(target_q, axis=1)
+
         current_q = tf.math.minimum(self.critic1([states, actions], training=False), \
                                     self.critic2([states, actions], training=False))
 
@@ -341,7 +337,8 @@ class Learner(object):
         if len(td_errors_shape) == 0:
             return td_errors
 
-        return tf.reduce_max(td_errors) * self.trajectory_n + (1-self.trajectory_n)*tf.reduce_mean(td_errors)
+        priority = tf.reduce_max(td_errors) * self.trajectory_n + (1-self.trajectory_n)*tf.reduce_mean(td_errors)
+        return priority #tf.abs(priority)
 
     def soft_update_models(self):
         target_critic1_weights = self.target_critic1.get_weights()
