@@ -7,7 +7,8 @@ import os
 from rl_utils.SARST_RandomAccess_MemoryBuffer import SARST_RandomAccess_MemoryBuffer
 
 # prevent TensorFlow of allocating whole GPU memory
-gpus = tf.config.experimental.list_physical_devices('GPU')
+gpus = tf.config.list_physical_devices('GPU')
+tf.config.set_visible_devices(gpus[0], 'GPU')
 tf.config.experimental.set_memory_growth(gpus[0], True)
 
 env = gym.make('LunarLanderContinuous-v2')
@@ -59,10 +60,10 @@ def policy_network():
     input = keras.layers.Input(shape=(X_shape))
     x = keras.layers.Dense(256, activation='relu')(input)
     x = keras.layers.Dense(256, activation='relu')(x)
-    mean_output = keras.layers.Dense(outputs_count, activation='linear',
+    mean_output = keras.layers.Dense(outputs_count, activation='tanh',
                                 kernel_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED),
                                 bias_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED))(x)
-    log_std_dev_output = keras.layers.Dense(outputs_count, activation='linear',
+    log_std_dev_output = keras.layers.Dense(outputs_count, activation='tanh',
                                 kernel_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED),
                                 bias_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED))(x)
 

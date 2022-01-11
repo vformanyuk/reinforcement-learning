@@ -13,8 +13,6 @@ class Actor(object):
     def __init__(self, id:int, gamma:float,
                  cmd_pipe:mp.Pipe, weights_pipe:mp.Pipe, replay_pipe:mp.Pipe, cancelation_token:mp.Value, training_active_flag:mp.Value,
                  *args, **kwargs):
-        # gpus = tf.config.experimental.list_physical_devices('GPU')
-        # tf.config.experimental.set_memory_growth(gpus[0], True)
         tf.config.set_visible_devices([], 'GPU') # run actors on CPU
 
         self.debug_mode = False
@@ -36,6 +34,7 @@ class Actor(object):
         self.trajectory_n = 0.9
         self.trajectory_length = 40
         self.burn_in_length = 10
+        self.actor_recurrent_layer_size = 256
         self.pid = os.getpid()
 
     def log(self, msg):
@@ -69,7 +68,10 @@ class Actor(object):
     def prepare_and_send_replay_data(self, exp_buffer:R2D2_AgentBuffer, batch_length:int):
         transmittion_buffer = AgentTransmitionBuffer()
         for actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones in exp_buffer.get_tail(batch_length):
-            actor_hidden_state = self.actor_burn_in(states, actor_h, tf.convert_to_tensor(len(rewards)))
+            if len(burn_in_states) > 0:
+                actor_hidden_state = self.actor_burn_in(burn_in_states, actor_h, tf.convert_to_tensor(len(rewards)))
+            else:
+                actor_hidden_state = tf.zeros(shape=(len(rewards), self.actor_recurrent_layer_size), dtype=tf.float32)
             td_errors = self.get_trajectory_error(states, actions, next_states, rewards, gamma_powers, dones, actor_hidden_state)
             transmittion_buffer.append(actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones, td_errors)
         self.send_replay_data(transmittion_buffer)
@@ -123,7 +125,8 @@ class Actor(object):
         if len(td_errors_shape) == 0:
             return td_errors
 
-        return tf.reduce_max(td_errors) * self.trajectory_n + (1 - self.trajectory_n) * tf.reduce_mean(td_errors)
+        priority = tf.reduce_max(td_errors) * self.trajectory_n + (1 - self.trajectory_n) * tf.reduce_mean(td_errors)
+        return priority #tf.abs(priority)
 
     def interpolation_step(self, env, s0, action, stack_size=4):
         result_states = []
@@ -146,19 +149,18 @@ class Actor(object):
         env = gym.make('LunarLanderContinuous-v2')
         state_space_shape = (self.stack_size, env.observation_space.shape[0])
         outputs_count = env.action_space.shape[0]
-        actor_recurrent_layer_size = 256
 
-        self.actor = policy_network(state_space_shape, outputs_count, actor_recurrent_layer_size)
+        self.actor = policy_network(state_space_shape, outputs_count, self.actor_recurrent_layer_size)
         
-        self.critic_1 = critic_network(state_space_shape, outputs_count, actor_recurrent_layer_size)
-        self.critic_2 = critic_network(state_space_shape, outputs_count, actor_recurrent_layer_size)
+        self.critic_1 = critic_network(state_space_shape, outputs_count, self.actor_recurrent_layer_size)
+        self.critic_2 = critic_network(state_space_shape, outputs_count, self.actor_recurrent_layer_size)
 
         self.get_target_weights()
 
         exp_buffer = R2D2_AgentBuffer(distributed_mode=True, buffer_size=1001, N=self.N, gamma=self.gamma, 
                                     state_shape=(self.stack_size, env.observation_space.shape[0]),
                                     action_shape=env.action_space.shape, 
-                                    hidden_state_shape=(actor_recurrent_layer_size,), 
+                                    hidden_state_shape=(self.actor_recurrent_layer_size,), 
                                     trajectory_size=self.trajectory_length, burn_in_length=self.burn_in_length)
         rewards_history = []
         
@@ -174,7 +176,7 @@ class Actor(object):
                 observation.append(state0)
 
             exp_buffer.reset()
-            actor_hx = tf.zeros(shape=(1, actor_recurrent_layer_size), dtype=tf.float32)
+            actor_hx = tf.zeros(shape=(1, self.actor_recurrent_layer_size), dtype=tf.float32)
 
             episodic_reward = 0
             epoch_steps = 0
