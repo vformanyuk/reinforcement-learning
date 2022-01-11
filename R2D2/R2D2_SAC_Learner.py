@@ -315,6 +315,10 @@ class Learner(object):
         return actor_loss
 
     @tf.function(experimental_relax_shapes=True)
+    def invertible_function_rescaling(self, x):
+        return tf.sign(x)*(tf.sqrt(tf.abs(x) + 1) - 1) + self.q_rescaling_epsilone * x
+
+    @tf.function(experimental_relax_shapes=True)
     def get_trajectory_error(self, states, actions, next_states, rewards, gamma_powers, dones, hidden_rnn_states):
         mu, log_sigma, ___ = self.actor([next_states, hidden_rnn_states], training=False)
         mu = tf.squeeze(mu)
@@ -325,9 +329,12 @@ class Learner(object):
         if len(next_actions_shape)  < 2:
             next_actions = tf.expand_dims(next_actions, axis=0)
         
-        target_q = tf.math.minimum(self.critic1([next_states, next_actions], training=False), \
-                                self.critic2([next_states, next_actions], training=False))
-        target_q = rewards + tf.math.pow(self.gamma, gamma_powers + 1) * (1 - dones) * tf.squeeze(target_q, axis=1)
+        next_q = tf.math.minimum(self.critic_1([next_states, next_actions], training=False), \
+                                 self.critic_2([next_states, next_actions], training=False))
+
+        inverse_q_rescaling = tf.math.pow(self.invertible_function_rescaling(tf.squeeze(next_q, axis=1)), -1)
+        target_q = rewards + tf.math.pow(self.gamma, gamma_powers + 1) * (1 - dones) * inverse_q_rescaling
+        target_q = self.invertible_function_rescaling(target_q)
 
         current_q = tf.math.minimum(self.critic1([states, actions], training=False), \
                                     self.critic2([states, actions], training=False))

@@ -60,10 +60,10 @@ def policy_network():
     input = keras.layers.Input(shape=(X_shape))
     x = keras.layers.Dense(256, activation='relu')(input)
     x = keras.layers.Dense(256, activation='relu')(x)
-    mean_output = keras.layers.Dense(outputs_count, activation='tanh',
+    mean_output = keras.layers.Dense(outputs_count, activation='linear',
                                 kernel_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED),
                                 bias_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED))(x)
-    log_std_dev_output = keras.layers.Dense(outputs_count, activation='tanh',
+    log_std_dev_output = keras.layers.Dense(outputs_count, activation='linear',
                                 kernel_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED),
                                 bias_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED))(x)
 
