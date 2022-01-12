@@ -44,6 +44,7 @@ class Learner(object):
         self.rnn_size = recurrent_layer_size
         self.stack_size = 4
         self.trajectory_n = 0.9
+        self.q_rescaling_epsilone = tf.constant(1e-6, dtype=tf.float32)
 
         self.cmd_pipe = cmd_pipe
         self.weights_pipe = weights_pipe
