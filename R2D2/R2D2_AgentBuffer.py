@@ -42,6 +42,7 @@ class R2D2_AgentBuffer(object):
         self.rewards_memory[self.memory_idx] = 0
         self.gamma_power_memory[self.memory_idx] = 0
         self.dones_memory[self.memory_idx] = is_terminal
+        self.actor_hidden_states_memory.append(actor_hidden_state)
         #propogate back current reward
         n_return_idx = 0
         while self.memory_idx - n_return_idx >= 0 and n_return_idx < self.N: # [0 .. N-1]
@@ -52,15 +53,12 @@ class R2D2_AgentBuffer(object):
         self.current_trajectory.append(self.memory_idx)
         if self.memory_idx == 0:
             self.__store_burn_in([])
-            self.actor_hidden_states_memory.append(actor_hidden_state)
         
         if  len(self.current_trajectory) == (self._trajectory_size - self._burn_in_len):
             self.burn_in_trajectory.clear() # clear exisitng burn-in trajectory to start collecting new one
         
         if self._burn_in_len > 0 and len(self.burn_in_trajectory) < self._burn_in_len and self.memory_idx >= (self._trajectory_size - self._burn_in_len + 1):
             self.burn_in_trajectory.append(self.memory_idx)
-            if len(self.burn_in_trajectory) == 1: # store hidden states for burn-in trajectory unroll
-                self.actor_hidden_states_memory.append(actor_hidden_state)
             if len(self.burn_in_trajectory) == self._burn_in_len: # save burn-in trajectory and begin collecting training trajectory
                 self.__store_burn_in(self.burn_in_trajectory) # don't clear collected trajectory here                
                 self.current_trajectory.append(self.memory_idx) # last burn-in trajectory record is first one of training trajectory
@@ -80,7 +78,6 @@ class R2D2_AgentBuffer(object):
                 # Only trajectory store contains correct number of records
                 for _ in range(redundant_records_count):
                     self.burn_in_memory.pop()
-                    self.actor_hidden_states_memory.pop()
                 self.reset()
                 return
         self.memory_idx += 1
@@ -111,7 +108,8 @@ class R2D2_AgentBuffer(object):
         rewards_ = tf.stack(self.rewards_memory[trajectory_idxs])
         gps_ = tf.stack(self.gamma_power_memory[trajectory_idxs])
         dones_ = tf.stack(self.dones_memory[trajectory_idxs])
-        self.trajectory_cache.append((states_, actions_, next_states_, rewards_, gps_, dones_))
+        hidden_states_ = tf.stack([tf.squeeze(self.actor_hidden_states_memory[idx], axis=0) for idx in states_idxs])
+        self.trajectory_cache.append((states_, actions_, next_states_, rewards_, gps_, dones_, hidden_states_))
 
     def get_tail(self, batch_size):
         upper_bound = len(self.trajectory_cache)
@@ -125,7 +123,8 @@ class R2D2_AgentBuffer(object):
                     self.trajectory_cache[idx][2], \
                     self.trajectory_cache[idx][3], \
                     self.trajectory_cache[idx][4], \
-                    self.trajectory_cache[idx][5]
+                    self.trajectory_cache[idx][5], \
+                    self.trajectory_cache[idx][6]
 
     def __call__(self, batch_size):
         idxs = np.random.permutation(len(self.trajectory_cache))[:batch_size]
@@ -137,4 +136,5 @@ class R2D2_AgentBuffer(object):
                     self.trajectory_cache[idx][2], \
                     self.trajectory_cache[idx][3], \
                     self.trajectory_cache[idx][4], \
-                    self.trajectory_cache[idx][5]
+                    self.trajectory_cache[idx][5], \
+                    self.trajectory_cache[idx][6]

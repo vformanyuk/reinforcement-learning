@@ -29,10 +29,12 @@ class TransmitionBuffer:
 class AgentTransmitionBuffer(TransmitionBuffer):
     def __init__(self) -> None:
         super(AgentTransmitionBuffer, self).__init__()
-        self.td_errors_mem=[]
-    def append(self, actor_hx, burn_in, sates, actions, next_states, rewards, gps, dones, td_error):
+        self.td_errors_mem = []
+        self.hidden_states_mem = []
+    def append(self, actor_hx, burn_in, sates, actions, next_states, rewards, gps, dones, hidden_states, td_error):
         super(AgentTransmitionBuffer, self).append(actor_hx, burn_in, sates, actions, next_states, rewards, gps, dones)
         self.td_errors_mem.append(td_error)
+        self.hidden_states_mem.append(hidden_states)
     def __len__(self):
         return len(self.rewards_mem)
     def __next__(self):
@@ -47,6 +49,7 @@ class AgentTransmitionBuffer(TransmitionBuffer):
                 self.rewards_mem[self.iteration_idx], \
                 self.gamma_powers_mem[self.iteration_idx], \
                 self.dones_mem[self.iteration_idx], \
+                self.hidden_states_mem[self.iteration_idx], \
                 self.td_errors_mem[self.iteration_idx]
 
 class LearnerTransmitionBuffer(TransmitionBuffer):
@@ -54,10 +57,12 @@ class LearnerTransmitionBuffer(TransmitionBuffer):
         super(LearnerTransmitionBuffer, self).__init__()
         self.is_weights_mem = []
         self.meta_idxs_mem = []
-    def append(self, actor_hx, burn_in, sates, actions, next_states, rewards, gps, dones, is_weights, meta_idxs):
+        self.hidden_states_mem = []
+    def append(self, actor_hx, burn_in, sates, actions, next_states, rewards, gps, dones, hidden_states, is_weights, meta_idxs):
         super(LearnerTransmitionBuffer, self).append(actor_hx, burn_in, sates, actions, next_states, rewards, gps, dones)
         self.is_weights_mem.append(is_weights)
         self.meta_idxs_mem.append(meta_idxs)
+        self.hidden_states_mem.append(hidden_states)
     def __len__(self):
         return len(self.rewards_mem)
     def __next__(self):
@@ -72,5 +77,6 @@ class LearnerTransmitionBuffer(TransmitionBuffer):
                 self.rewards_mem[self.iteration_idx], \
                 self.gamma_powers_mem[self.iteration_idx], \
                 self.dones_mem[self.iteration_idx], \
+                self.hidden_states_mem[self.iteration_idx], \
                 self.is_weights_mem[self.iteration_idx], \
                 self.meta_idxs_mem[self.iteration_idx]

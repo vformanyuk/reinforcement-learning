@@ -18,7 +18,7 @@ class rank_container(object):
 class R2D2_TrajectoryStore(object):
     def __init__(self, buffer_size:int, alpha=0.5, beta=0.7, beta_increase_rate=1.000001):
         self.buffer_size = buffer_size
-        self.actor_hidden_states_memory = []
+        self.burn_in_hidden_states_memory = []
         self.burn_in_memory = []
         self.trajectory_cache = []
         self.trajectory_length_memory = []
@@ -38,9 +38,9 @@ class R2D2_TrajectoryStore(object):
     def __len__(self):
         return len(self.trajectory_cache)
 
-    def store(self, actor_hidden_state, burn_in_trajectory, trajectory, trajectory_length, td_error):
+    def store(self, burn_in_hidden_state, burn_in_trajectory, trajectory, trajectory_length, td_error):
         write_idx = self.memory_idx % self.buffer_size
-        self.actor_hidden_states_memory.append(actor_hidden_state)
+        self.burn_in_hidden_states_memory.append(burn_in_hidden_state)
         self.burn_in_memory.append(burn_in_trajectory)
         self.trajectory_cache.append(trajectory)
         self.trajectory_length_memory.append(trajectory_length)
@@ -71,8 +71,20 @@ class R2D2_TrajectoryStore(object):
     def __get_sampling_interval_boundary(self, interval_idx, interval_len):
         return np.exp(np.log((interval_len*interval_idx - self.gamma_s)*(1-self.alpha) + 1) / (1-self.alpha))
 
+    # def update_priorities_buggy(self, meta_idxs, td_errors):
+    #     to_remove = []
+    #     # because indexes are fetched in reversed way, items are poped from the end and thus array indexes of preciding items are not affected
+    #     for idx in meta_idxs:
+    #         to_remove.append(self.ordered_storage.pop(idx))
+    #     for container, err in zip(to_remove, np.abs(td_errors)):
+    #         if err > self.td_max:
+    #             self.td_max = err
+    #         bs.insort_right(self.ordered_storage, rank_container(container.replay_buffer_idx, err))
+
     def update_priorities(self, meta_idxs, td_errors):
         for idx, err in zip(meta_idxs, td_errors):
+            if err > self.td_max:
+                self.td_max = err
             self.lookup[idx].td_error = err
         self.ordered_storage.sort()
 
@@ -102,8 +114,8 @@ class R2D2_TrajectoryStore(object):
         IS_weights_IT = iter(importance_sampling_weights)
         for idx in idxs:
             normalized_IS_weight = float(next(IS_weights_IT) / self.max_is_weight)
-            yield self.actor_hidden_states_memory[idx], \
+            yield self.burn_in_hidden_states_memory[idx], \
                     self.burn_in_memory[idx], \
                     self.trajectory_cache[idx], \
                     tf.fill(dims=[self.trajectory_length_memory[idx]], value=normalized_IS_weight), \
-                    idx # return index in replay buffer, not ordered storage
+                    idx

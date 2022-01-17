@@ -13,6 +13,8 @@ class Actor(object):
     def __init__(self, id:int, gamma:float,
                  cmd_pipe:mp.Pipe, weights_pipe:mp.Pipe, replay_pipe:mp.Pipe, cancelation_token:mp.Value, training_active_flag:mp.Value,
                  *args, **kwargs):
+        # gpus = tf.config.experimental.list_physical_devices('GPU')
+        # tf.config.experimental.set_memory_growth(gpus[0], True)
         tf.config.set_visible_devices([], 'GPU') # run actors on CPU
 
         self.debug_mode = False
@@ -67,13 +69,11 @@ class Actor(object):
 
     def prepare_and_send_replay_data(self, exp_buffer:R2D2_AgentBuffer, batch_length:int):
         transmittion_buffer = AgentTransmitionBuffer()
-        for actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones in exp_buffer.get_tail(batch_length):
+        for burn_in_hidden, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones, actor_hidden_state in exp_buffer.get_tail(batch_length):
             if len(burn_in_states) > 0:
-                actor_hidden_state = self.actor_burn_in(burn_in_states, actor_h, tf.convert_to_tensor(len(rewards)))
-            else:
-                actor_hidden_state = tf.zeros(shape=(len(rewards), self.actor_recurrent_layer_size), dtype=tf.float32)
+                self.actor_burn_in(burn_in_states, burn_in_hidden, tf.convert_to_tensor(len(rewards)))
             td_errors = self.get_trajectory_error(states, actions, next_states, rewards, gamma_powers, dones, actor_hidden_state)
-            transmittion_buffer.append(actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones, td_errors)
+            transmittion_buffer.append(burn_in_hidden, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones, actor_hidden_state, td_errors)
         self.send_replay_data(transmittion_buffer)
 
     @tf.function(experimental_relax_shapes=True)
