@@ -44,16 +44,16 @@ if __name__ == '__main__':
                 if cmd[0] == ACTOR_CMD_SEND_REPLAY_DATA: # actor sends replay data
                     replay_data:AgentTransmitionBuffer = replay_data_pipes[cmd[1]][0].recv() # AgentTransmitionBuffer recieved 
                     with data_sync_obj:
-                        for actor_hidden_state, burn_in, states, actions, next_states, rewards, gammas, dones, td_error in replay_data:
+                        for actor_hidden_state, burn_in, states, actions, next_states, rewards, gammas, dones, hidden_states, td_error in replay_data:
                             # store whole trajectory along with burn-in, actor hidden state and td_error
-                            replay_buffer.store(actor_hidden_state, burn_in, [states, actions, next_states, rewards, gammas, dones], len(rewards), td_error)
+                            replay_buffer.store(actor_hidden_state, burn_in, [states, actions, next_states, rewards, gammas, dones, hidden_states], len(rewards), td_error)
                     orchestrator_log(f'Got replay data from actor {cmd[1]}')
                     continue
             except EOFError:
-                print("Connection closed.")
+                print("[Orchestrator] Client connection closed.")
                 connection_alive = False
             except OSError:
-                print('Handle closed.')
+                print('[Orchestrator] Client pipe handle closed.')
                 connection_alive = False
 
     def learner_cmd_processor(actor, critic1, critic2, replay_buffer:R2D2_TrajectoryStore, \
@@ -86,6 +86,7 @@ if __name__ == '__main__':
                                         trajectory[3], 
                                         trajectory[4], 
                                         trajectory[5], 
+                                        trajectory[6], 
                                         is_weights,
                                         meta_idx)
                     replay_data_pipe.send(data)
@@ -98,14 +99,15 @@ if __name__ == '__main__':
                     orchestrator_log(f'Updated trajectory priorities recieved')
                     continue
             except EOFError:
-                print("Connection closed.")
+                print("[Orchestrator] Learner connection closed.")
                 connection_alive = False
             except OSError:
-                print('Handle closed.')
+                print('[Orchestrator] Learner pipe handle closed.')
                 connection_alive = False
 
     # prevent TensorFlow of allocating whole GPU memory. Must be called in every module
-    gpus = tf.config.experimental.list_physical_devices('GPU')
+    gpus = tf.config.list_physical_devices('GPU')
+    tf.config.set_visible_devices(gpus[0], 'GPU')
     tf.config.experimental.set_memory_growth(gpus[0], True)
 
     env = gym.make('LunarLanderContinuous-v2')

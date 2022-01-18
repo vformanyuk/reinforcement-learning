@@ -29,6 +29,7 @@ class Learner(object):
 
         self.logging_enabled = True
 
+        # prevent TensorFlow of allocating whole GPU memory. Must be called in every module
         gpus = tf.config.list_physical_devices('GPU')
         tf.config.set_visible_devices(gpus[0], 'GPU')
         tf.config.experimental.set_memory_growth(gpus[0], True)
@@ -184,19 +185,17 @@ class Learner(object):
             critic_losses = []
 
             # actor_h and meta_idx are single tensors. Others are mini batches of values
-            for actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones, is_weights, meta_idx in trajectories:
+            for actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones, hidden_states, is_weights, meta_idx in trajectories:
                 if len(burn_in_states) > 0:
-                    actor_training_hx = self.actor_burn_in(burn_in_states, actor_h, tf.convert_to_tensor(len(rewards), dtype=tf.int32))
-                else:
-                    actor_training_hx = tf.zeros(shape=(len(rewards), self.actor_recurrent_layer_size), dtype=tf.float32)
+                    self.actor_burn_in(burn_in_states, actor_h, tf.convert_to_tensor(len(rewards), dtype=tf.int32))
                 for _ in range(self.gradient_step):
-                    critic1_loss, critic2_loss = self.train_critics(actor_training_hx, states, actions, next_states, rewards, gamma_powers, is_weights, dones)
+                    critic1_loss, critic2_loss = self.train_critics(hidden_states, states, actions, next_states, rewards, gamma_powers, is_weights, dones)
                     critic_losses.append(critic1_loss)
                     critic_losses.append(critic2_loss)
-                    actor_loss = self.train_actor(states, actor_training_hx)
+                    actor_loss = self.train_actor(states, hidden_states)
                     actor_losses.append(actor_loss)
                 training_runs += 1
-                td_errors[meta_idx] = self.get_trajectory_error(states, actions, next_states, rewards, gamma_powers, dones, actor_training_hx)
+                td_errors[meta_idx] = self.get_trajectory_error(states, actions, next_states, rewards, gamma_powers, dones, hidden_states)
                 if training_runs % 10 == 0:
                     self.soft_update_models()
             self.log(f'Critic error {np.mean(critic_losses):.4f} Actor error {np.mean(actor_losses):.4f}')
@@ -330,8 +329,8 @@ class Learner(object):
         if len(next_actions_shape)  < 2:
             next_actions = tf.expand_dims(next_actions, axis=0)
         
-        next_q = tf.math.minimum(self.critic_1([next_states, next_actions], training=False), \
-                                 self.critic_2([next_states, next_actions], training=False))
+        next_q = tf.math.minimum(self.critic1([next_states, next_actions], training=False), \
+                                 self.critic2([next_states, next_actions], training=False))
 
         inverse_q_rescaling = tf.math.pow(self.invertible_function_rescaling(tf.squeeze(next_q, axis=1)), -1)
         target_q = rewards + tf.math.pow(self.gamma, gamma_powers + 1) * (1 - dones) * inverse_q_rescaling
