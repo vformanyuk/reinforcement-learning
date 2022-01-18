@@ -30,7 +30,8 @@ class Learner(object):
         self.logging_enabled = True
 
         # prevent TensorFlow of allocating whole GPU memory. Must be called in every module
-        gpus = tf.config.experimental.list_physical_devices('GPU')
+        gpus = tf.config.list_physical_devices('GPU')
+        tf.config.set_visible_devices(gpus[0], 'GPU')
         tf.config.experimental.set_memory_growth(gpus[0], True)
 
         self.batch_size = batch_size
