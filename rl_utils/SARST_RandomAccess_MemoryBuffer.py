@@ -20,11 +20,27 @@ class SARST_RandomAccess_MemoryBuffer(object):
         self.dones_memory[write_idx] = is_terminal
         self.memory_idx += 1
 
-    def __call__(self, batch_size):
-        upper_bound = self.memory_idx if self.memory_idx < self.buffer_size else self.buffer_size
-        idxs = np.random.permutation(upper_bound)[:batch_size]
+    def __call__(self, batch_size, idxs = []):
+        if len(idxs) == 0:
+            upper_bound = self.memory_idx if self.memory_idx < self.buffer_size else self.buffer_size
+            idxs = np.random.permutation(upper_bound)[:batch_size]
         return tf.stack(self.states_memory[idxs]), \
             tf.stack(self.actions_memory[idxs]), \
             tf.stack(self.next_states_memory[idxs]), \
             tf.stack(self.rewards_memory[idxs]), \
             tf.stack(self.dones_memory[idxs])
+
+class SARST_MultiTask_RandomAccess_MemoryBuffer(SARST_RandomAccess_MemoryBuffer):
+    def __init__(self, buffer_size, state_shape, action_shape, context_vector_length, action_type = np.float32):
+        super().__init__(buffer_size,state_shape, action_shape, action_type)
+        self.tasks_memory = np.empty(shape=(buffer_size, context_vector_length), dtype = np.float32)
+    def store(self, context_vector:tf.Tensor, state:tf.Tensor, action:tf.Tensor, next_state:tf.Tensor, reward:tf.Tensor, is_terminal:tf.Tensor):
+        write_idx = self.memory_idx % self.buffer_size
+        self.tasks_memory[write_idx] = context_vector
+        super().store(state,action,next_state,reward,is_terminal)
+    def __call__(self, batch_size):
+        upper_bound = self.memory_idx if self.memory_idx < self.buffer_size else self.buffer_size
+        idxs = np.random.permutation(upper_bound)[:batch_size]
+        context_vectors = tf.stack(self.tasks_memory[idxs])
+        states, actions, next_states, rewards, dones = super().__call__(batch_size, idxs)
+        return states, actions, next_states, rewards, dones, context_vectors
