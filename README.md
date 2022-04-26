@@ -36,3 +36,7 @@ It is representative and doesn't skip frames like some other envs.
 
   Note 2: Because original paper says nothing about behavior near trajoctory end, the simplest approach was taken - length of last trajectoy may vary, but has length of atleast 2 records.
 * [Regularizing Action Policies for Smooth Control implementation based on Soft Actor-Critic](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_SAC_CAPS.py)
+* Active dendrites networks implementation [arxiv paper](https://arxiv.org/abs/2201.00042)
+  * Modified LunarLander environemnt [LunarLander multitask](https://github.com/vformanyuk/reinforcement-learning/blob/master/env/lunar_lander.py). This implementation has two tasks: original landing task and new - lift off. Last one require lander to fly off from landing pad
+  * [Active Dendrits and k-Winner-Takes-All layers](https://github.com/vformanyuk/reinforcement-learning/blob/master/rl_utils/ad_layer.py)
+  * The training [script](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_ActiveDendritsNetwork.py)
