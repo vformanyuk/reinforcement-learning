@@ -19,7 +19,7 @@ env = LunarLander(continuous=True) #gym.make('LunarLanderContinuous-v2')
 X_shape = (env.observation_space.shape[0])
 outputs_count = env.action_space.shape[0]
 context_vector_length = 2
-dendrits_count = 5 # optimal is context_vector_length, but this should work as well
+dendrits_count = 2
 
 batch_size = 100
 num_episodes = 5000
@@ -38,7 +38,7 @@ initializer_bounds = 3e-3
 
 RND_SEED = 0x12345
 
-checkpoint_step = 500
+checkpoint_step = 5
 max_epoch_steps = 1000
 global_step = 0
 
@@ -69,43 +69,41 @@ def policy_network():
     input = keras.layers.Input(shape=(X_shape))
     context_intput = keras.layers.Input(shape=(context_vector_length))
 
-    x = keras.layers.Dense(256, activation='relu')(input)
-    x = kWTA_Layer(top_activations_count=24)(x),
-    x = ADLayer(256, dendrits_count, context_vector_length)([x[0], context_intput]),
-    x = keras.layers.ReLU()(x[0]),
-    x = kWTA_Layer(top_activations_count=24)(x[0]),
+    x = keras.layers.Dense(512, activation='relu')(input)
+    x = kWTA_Layer(top_activations_count=55)(x)
+    x = ADLayer(256, dendrits_count, context_vector_length, use_abs_max = False)([x, context_intput])
+    x = keras.layers.ReLU()(x)
+    x = kWTA_Layer(top_activations_count=23)(x)
     mean_output = keras.layers.Dense(outputs_count, activation='linear',
                                 kernel_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED),
-                                bias_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED))(x[0])
+                                bias_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED))(x)
     log_std_dev_output = keras.layers.Dense(outputs_count, activation='linear',
                                 kernel_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED),
-                                bias_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED))(x[0])
+                                bias_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED))(x)
 
     model = keras.Model(inputs=[input, context_intput], outputs=[mean_output, log_std_dev_output])
     return model
 
 def critic_network():
     input = keras.layers.Input(shape=(X_shape))
+    context_intput = keras.layers.Input(shape=(context_vector_length))
     actions_input = keras.layers.Input(shape=(outputs_count))
 
     x = keras.layers.Concatenate()([input, actions_input])
-    x = keras.layers.Dense(256, activation='relu')(x)
-    x = keras.layers.Dense(256, activation='relu')(x)
+    x = keras.layers.Dense(512, activation='relu')(x)
+    x = kWTA_Layer(top_activations_count=55)(x),
+    x = ADLayer(512, dendrits_count, context_vector_length, use_abs_max = False)([x[0], context_intput]),
+    x = keras.layers.ReLU()(x[0]),
+    x = kWTA_Layer(top_activations_count=52)(x[0]),
     q_layer = keras.layers.Dense(1, activation='linear',
                                 kernel_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED),
-                                bias_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED))(x)
+                                bias_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED))(x[0])
 
-    model = keras.Model(inputs=[input, actions_input], outputs=q_layer)
+    model = keras.Model(inputs=[input, actions_input, context_intput], outputs=q_layer)
     return model
 
-'''
-SAC uses action reparametrization to avoid expectation over action.
-So action is represented by squashed (tanh in this case) Normal distribution
-'''
 @tf.function
-def get_actions(mu, log_sigma, noise=None):
-    if noise is None:
-        noise = gaus_distr.sample()
+def get_actions(mu, log_sigma, noise):
     return tf.math.tanh(mu + tf.math.exp(log_sigma) * noise)
 
 @tf.function
@@ -118,15 +116,15 @@ def get_log_probs(mu, sigma, actions):
     return log_probs
 
 @tf.function
-def train_critics(states, actions, next_states, rewards, dones, context_vectors):
+def train_critics(states, actions, next_states, rewards, dones, context_vectors, noise):
     mu, log_sigma = actor([next_states, context_vectors])
     mu = tf.squeeze(mu)
     log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), log_std_min, log_std_max)
 
-    target_actions = get_actions(mu, log_sigma)
+    target_actions = get_actions(mu, log_sigma, noise)
 
-    min_q = tf.math.minimum(target_critic_1([next_states, target_actions], training=False), \
-                            target_critic_2([next_states, target_actions], training=False))
+    min_q = tf.math.minimum(target_critic_1([next_states, target_actions, context_vectors], training=False), \
+                            target_critic_2([next_states, target_actions, context_vectors], training=False))
     min_q = tf.squeeze(min_q, axis=1)
 
     sigma = tf.math.exp(log_sigma)
@@ -136,30 +134,30 @@ def train_critics(states, actions, next_states, rewards, dones, context_vectors)
     target_q = rewards + gamma * (1 - dones) * next_values
 
     with tf.GradientTape() as tape:
-        current_q = critic_1([states, actions], training=True)
+        current_q = critic_1([states, actions, context_vectors], training=True)
         c1_loss = mse_loss(current_q, target_q)
     gradients = tape.gradient(c1_loss, critic_1.trainable_variables)
     critic_optimizer.apply_gradients(zip(gradients, critic_1.trainable_variables))
 
     with tf.GradientTape() as tape:
-        current_q = critic_2([states, actions], training=True)
+        current_q = critic_2([states, actions, context_vectors], training=True)
         c2_loss = mse_loss(current_q, target_q)
     gradients = tape.gradient(c2_loss, critic_2.trainable_variables)
     critic_optimizer.apply_gradients(zip(gradients, critic_2.trainable_variables))
     return c1_loss, c2_loss
 
 @tf.function
-def train_actor(states, context_vectors):
+def train_actor(states, context_vectors, noise):
     alpha = tf.math.exp(alpha_log)
     with tf.GradientTape() as tape:
         mu, log_sigma = actor([states, context_vectors], training=True)
         mu = tf.squeeze(mu)
         log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), log_std_min, log_std_max)
 
-        target_actions = get_actions(mu, log_sigma)
+        target_actions = get_actions(mu, log_sigma, noise)
         
-        target_q = tf.math.minimum(critic_1([states, target_actions], training=False), \
-                                   critic_2([states, target_actions], training=False))
+        target_q = tf.math.minimum(critic_1([states, target_actions, context_vectors], training=False), \
+                                   critic_2([states, target_actions, context_vectors], training=False))
         target_q = tf.squeeze(target_q, axis=1)
         
         sigma = tf.math.exp(log_sigma)
@@ -192,14 +190,14 @@ def soft_update_models():
     target_critic_2.set_weights(updated_critic_2_weights)
 
 if os.path.isfile(actor_checkpoint_file_name):
-    actor = keras.models.load_model(actor_checkpoint_file_name)
+    actor = keras.models.load_model(actor_checkpoint_file_name, custom_objects={'ADLayer': ADLayer , "kWTA_Layer" : kWTA_Layer})
     print("Model restored from checkpoint.")
 else:
     actor = policy_network()
     print("New model created.")
 
 if os.path.isfile(critic_1_checkpoint_file_name):
-    critic_1 = keras.models.load_model(critic_1_checkpoint_file_name)
+    critic_1 = keras.models.load_model(critic_1_checkpoint_file_name, custom_objects={'ADLayer': ADLayer , 'kWTA_Layer' : kWTA_Layer})
     print("Critic model restored from checkpoint.")
 else:
     critic_1 = critic_network()
@@ -208,7 +206,7 @@ target_critic_1 = critic_network()
 target_critic_1.set_weights(critic_1.get_weights())
 
 if os.path.isfile(critic_2_checkpoint_file_name):
-    critic_2 = keras.models.load_model(critic_2_checkpoint_file_name)
+    critic_2 = keras.models.load_model(critic_2_checkpoint_file_name, custom_objects={'ADLayer': ADLayer , 'kWTA_Layer' : kWTA_Layer})
     print("Critic model restored from checkpoint.")
 else:
     critic_2 = critic_network()
@@ -235,8 +233,8 @@ for i in range(num_episodes):
     while not done:
         #env.render()
         mean, log_std_dev = actor([np.expand_dims(observation, axis = 0), tf.expand_dims(context_vector, axis = 0)], training=False)
-        throttle_action = get_actions(mean[0][0], log_std_dev[0][0])
-        eng_ctrl_action = get_actions(mean[0][1], log_std_dev[0][1])
+        throttle_action = get_actions(mean[0][0], log_std_dev[0][0], gaus_distr.sample())
+        eng_ctrl_action = get_actions(mean[0][1], log_std_dev[0][1], gaus_distr.sample())
 
         next_observation, reward, done, _ = env.step([throttle_action, eng_ctrl_action])
 
@@ -244,13 +242,14 @@ for i in range(num_episodes):
 
         if global_step > 10 * batch_size:
             states, actions, next_states, rewards, dones, context_vectors = exp_buffer(batch_size)
+            noise = gaus_distr.sample(sample_shape=(batch_size, 2))
 
             for _ in range(gradient_step):
-                critic1_loss, critic2_loss = train_critics(states, actions, next_states, rewards, dones, context_vectors)
+                critic1_loss, critic2_loss = train_critics(states, actions, next_states, rewards, dones, context_vectors, noise)
                 critic_loss_history.append(critic1_loss)
                 critic_loss_history.append(critic2_loss)
             
-                actor_loss = train_actor(states, context_vectors)
+                actor_loss = train_actor(states, context_vectors, noise)
                 actor_loss_history.append(actor_loss)
             soft_update_models()
 
