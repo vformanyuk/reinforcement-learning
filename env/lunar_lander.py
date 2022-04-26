@@ -157,7 +157,7 @@ class LunarLander(gym.Env, EzPickle):
 
         self.continuous = continuous
         self.lift_off = False
-        self.time_horizont = 200
+        self.time_horizont = 1000
         self.step_counter = 0
         self.minimal_distance = 0.3
 
@@ -205,7 +205,7 @@ class LunarLander(gym.Env, EzPickle):
         self.prev_shaping = None
         self.lift_off = lift_off
         self.step_counter = 0
-        self.time_horizont = 300 if lift_off else 1000
+        self.time_horizont = 500 if lift_off else 1000
 
         W = VIEWPORT_W / SCALE
         H = VIEWPORT_H / SCALE
