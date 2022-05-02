@@ -1,3 +1,4 @@
+from typing import List
 import gym
 import os
 import numpy as np
@@ -67,14 +68,15 @@ class Actor(object):
         except OSError:
             print("[send_replay_data] Connection closed.")
 
-    def prepare_and_send_replay_data(self, exp_buffer:R2D2_AgentBuffer, batch_length:int):
+    def prepare_and_send_replay_data(self, exp_buffer:R2D2_AgentBuffer, trajectories:List[int]):
         transmittion_buffer = AgentTransmitionBuffer()
-        for burn_in_hidden, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones, actor_hidden_state in exp_buffer.get_tail(batch_length):
+        for burn_in_hidden, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones, actor_hidden_state in exp_buffer.get_data(trajectories):
             if len(burn_in_states) > 0:
                 self.actor_burn_in(burn_in_states, burn_in_hidden, tf.convert_to_tensor(len(rewards)))
             td_errors = self.get_trajectory_error(states, actions, next_states, rewards, gamma_powers, dones, actor_hidden_state)
             transmittion_buffer.append(burn_in_hidden, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones, actor_hidden_state, td_errors)
-        self.send_replay_data(transmittion_buffer)
+        if len(transmittion_buffer) > 0:
+            self.send_replay_data(transmittion_buffer)
 
     @tf.function(experimental_relax_shapes=True)
     def actor_burn_in(self, states, hx0, trajectory_length):
@@ -119,14 +121,14 @@ class Actor(object):
         current_q = tf.math.minimum(self.critic_1([states, actions], training=False), \
                                     self.critic_2([states, actions], training=False))
 
-        td_errors = target_q - tf.squeeze(current_q, axis=1)
+        td_errors = tf.abs(target_q - tf.squeeze(current_q, axis=1))
 
         td_errors_shape = tf.shape(td_errors)
         if len(td_errors_shape) == 0:
             return td_errors
 
         priority = tf.reduce_max(td_errors) * self.trajectory_n + (1 - self.trajectory_n) * tf.reduce_mean(td_errors)
-        return priority #tf.abs(priority)
+        return priority
 
     def interpolation_step(self, env, s0, action, stack_size=4):
         result_states = []
@@ -145,6 +147,9 @@ class Actor(object):
                 result_states[j+1][i] = y
         return result_states, r, d
 
+    def _on_trajectory_ready(self, buffer:R2D2_AgentBuffer, idx:int):
+        self.prepare_and_send_replay_data(buffer, [idx])
+
     def run(self):
         env = gym.make('LunarLanderContinuous-v2')
         state_space_shape = (self.stack_size, env.observation_space.shape[0])
@@ -160,7 +165,7 @@ class Actor(object):
         exp_buffer = R2D2_AgentBuffer(distributed_mode=True, buffer_size=1001, N=self.N, gamma=self.gamma, 
                                     state_shape=(self.stack_size, env.observation_space.shape[0]),
                                     action_shape=env.action_space.shape, 
-                                    hidden_state_shape=(self.actor_recurrent_layer_size,), 
+                                    trajectory_ready_callback=self._on_trajectory_ready, 
                                     trajectory_size=self.trajectory_length, burn_in_length=self.burn_in_length)
         rewards_history = []
         
@@ -191,8 +196,11 @@ class Actor(object):
 
                 exp_buffer.store(actor_hx, observation, [throttle_action, eng_ctrl_action], reward, float(done))
 
-                if (epoch_steps % (self.trajectory_length + self.burn_in_length + self.N) == 0 and len(exp_buffer) > 0) or done:
-                    self.prepare_and_send_replay_data(exp_buffer, 1)
+                # if (epoch_steps % (self.trajectory_length + self.burn_in_length + self.N) == 0 and len(exp_buffer) > 0) or done:
+                #     self.prepare_and_send_replay_data(exp_buffer, 1)
+
+                if done:
+                    self.prepare_and_send_replay_data(exp_buffer, exp_buffer.get_remaining_trajectories())
 
                 if global_step % self.exchange_steps == 0 and self.training_active.value > 0: # update target networks every 'exchange_steps'
                     self.get_target_weights()

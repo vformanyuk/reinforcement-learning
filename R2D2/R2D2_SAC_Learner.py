@@ -339,13 +339,13 @@ class Learner(object):
         current_q = tf.math.minimum(self.critic1([states, actions], training=False), \
                                     self.critic2([states, actions], training=False))
 
-        td_errors = target_q - tf.squeeze(current_q, axis=1)
+        td_errors = tf.abs(target_q - tf.squeeze(current_q, axis=1))
         td_errors_shape = tf.shape(td_errors)
         if len(td_errors_shape) == 0:
             return td_errors
 
         priority = tf.reduce_max(td_errors) * self.trajectory_n + (1-self.trajectory_n)*tf.reduce_mean(td_errors)
-        return priority #tf.abs(priority)
+        return priority
 
     def soft_update_models(self):
         target_critic1_weights = self.target_critic1.get_weights()

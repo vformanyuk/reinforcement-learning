@@ -35,7 +35,7 @@ class Trajectory:
 
 class R2D2_AgentBuffer(object):
     def __init__(self, distributed_mode:bool, buffer_size:int, N:int, gamma:float, 
-                state_shape, action_shape, hidden_state_shape, reward_shape=None, action_type = np.float32,
+                state_shape, action_shape, trajectory_ready_callback = None, reward_shape=None, action_type = np.float32,
                 trajectory_size=80, burn_in_length=10, trajectory_overlap = 40):
         self._distributed_mode = distributed_mode # when NOT in distributed mode trajectory cache and burn-in memory not cleared after episode end
         self._trajectory_size = trajectory_size
@@ -51,6 +51,8 @@ class R2D2_AgentBuffer(object):
         self.actor_hidden_states_memory = []
         self.trajectories = []
         self.trajectories.append(Trajectory(self._trajectory_size,0))
+        self.sent_trajectories = []
+        self.trajectory_ready = trajectory_ready_callback
         self.memory_idx = 0
         self.N = N
         self.gammas=[]
@@ -81,10 +83,12 @@ class R2D2_AgentBuffer(object):
             self.gamma_power_memory[self.memory_idx - n_return_idx] = n_return_idx
             n_return_idx += 1
 
-        for trajectory in self.trajectories:
+        for idx, trajectory in enumerate(self.trajectories):
             trajectory.add(self.memory_idx)
-            if is_terminal > 0:
-                trajectory.verify_trajectory()
+            if self.trajectory_ready!=None and idx not in self.sent_trajectories and \
+               trajectory.is_complete() and trajectory.write_idx + self.N >= self.write_idx:
+                self.trajectory_ready(self, idx)
+                self.sent_trajectories.append(idx)
 
         if self.memory_idx > 0 and \
             self.memory_idx % (self._trajectory_size - self._burn_in_len - self._trajectory_overlap) == 0 and \
@@ -96,22 +100,26 @@ class R2D2_AgentBuffer(object):
     def reset(self):
         if self._distributed_mode: # in distribured mode (for APE-X or R2D2) memory completly cleared after every episode
             self.actor_hidden_states_memory.clear()
+            self.sent_trajectories.clear()
             self.trajectories.clear()
             self.trajectories.append(Trajectory(self._trajectory_size,0))
         self.memory_idx = 0
 
-    def get_tail(self, batch_size):
-        upper_bound = len(self.trajectories)
-        lower_bound = 0 if upper_bound == 0 else upper_bound - batch_size
-        assert lower_bound >= 0, "Too few records in trajectory cache"
-        for idx in range(lower_bound, upper_bound):
-            hidden_state_idx = self.trajectories[idx].data[1] # [0] is last in burn-in
+    def get_remaining_trajectories(self):
+        for idx, trajectory in enumerate(self.trajectories):
+            if idx not in self.sent_trajectories and not trajectory.writing_burn_in:
+                trajectory.verify_trajectory()
+                yield idx
+
+    def get_data(self, trajectory_idxs):
+        for idx in trajectory_idxs:
+            hidden_state_idx = self.trajectories[idx].data[0]
             burn_in_idxs = self.trajectories[idx].burn_in
             states_idxs = self.trajectories[idx].data[:-1]
             trajectory_idxs = self.trajectories[idx].data[1:]
-            burn_in_trajectory = tf.stack(self.states_memory[burn_in_idxs]) if len(burn_in_idxs) > 0 else []
+            burn_in_states = tf.stack(self.states_memory[burn_in_idxs]) if len(burn_in_idxs) > 0 else []
             yield self.actor_hidden_states_memory[hidden_state_idx], \
-                    burn_in_trajectory, \
+                    burn_in_states, \
                     tf.stack(self.states_memory[states_idxs]), \
                     tf.stack(self.actions_memory[trajectory_idxs]), \
                     tf.stack(self.states_memory[trajectory_idxs]), \

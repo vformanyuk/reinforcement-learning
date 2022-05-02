@@ -125,8 +125,8 @@ if __name__ == '__main__':
     outputs_count = env.action_space.shape[0]
     actor_recurrent_layer_size = 256
 
-    trajectory_length = 100
-    burn_in_length = 28
+    trajectory_length = 80
+    burn_in_length = 20
 
     exp_buffer = R2D2_TrajectoryStore(buffer_size=1000000, alpha=0.7, beta=0.5, beta_increase_rate=1)
 
