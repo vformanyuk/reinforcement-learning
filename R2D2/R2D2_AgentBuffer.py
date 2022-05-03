@@ -86,7 +86,7 @@ class R2D2_AgentBuffer(object):
         for idx, trajectory in enumerate(self.trajectories):
             trajectory.add(self.memory_idx)
             if self.trajectory_ready!=None and idx not in self.sent_trajectories and \
-               trajectory.is_complete() and trajectory.write_idx + self.N >= self.write_idx:
+               trajectory.is_complete() and trajectory.write_idx + self.N >= self.memory_idx:
                 self.trajectory_ready(self, idx)
                 self.sent_trajectories.append(idx)
 
