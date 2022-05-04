@@ -70,20 +70,30 @@ class Actor(object):
 
     def prepare_and_send_replay_data(self, exp_buffer:R2D2_AgentBuffer, trajectories:List[int]):
         transmittion_buffer = AgentTransmitionBuffer()
-        for burn_in_hidden, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones, actor_hidden_state in exp_buffer.get_data(trajectories):
+        for burn_in_hidden, burn_in_states, burn_in_actions, states, actions, next_states, rewards, gamma_powers, dones, stored_hidden_states in exp_buffer.get_data(trajectories):
+            trajectory_length = tf.convert_to_tensor(len(rewards), dtype=tf.int32)
             if len(burn_in_states) > 0:
-                self.actor_burn_in(burn_in_states, burn_in_hidden, tf.convert_to_tensor(len(rewards)))
-            td_errors = self.get_trajectory_error(states, actions, next_states, rewards, gamma_powers, dones, actor_hidden_state)
-            transmittion_buffer.append(burn_in_hidden, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones, actor_hidden_state, td_errors)
+                ch1, ch2 = self.networks_rollout(burn_in_states, burn_in_actions, burn_in_hidden, trajectory_length)
+            else:
+                ch1 = tf.zeros(shape=(trajectory_length, self.actor_recurrent_layer_size), dtype=tf.float32)
+                ch2 = tf.zeros(shape=(trajectory_length, self.actor_recurrent_layer_size), dtype=tf.float32)
+            td_errors = self.get_trajectory_error(states, actions, next_states, rewards, gamma_powers, dones, stored_hidden_states, ch1, ch2)
+            transmittion_buffer.append(burn_in_hidden, burn_in_states, burn_in_actions, 
+                                        states, actions, next_states, rewards, gamma_powers, dones, 
+                                        stored_hidden_states, td_errors)
         if len(transmittion_buffer) > 0:
             self.send_replay_data(transmittion_buffer)
 
     @tf.function(experimental_relax_shapes=True)
-    def actor_burn_in(self, states, hx0, trajectory_length):
-        hx = hx0 # hx = tf.expand_dims(hx0, axis=0)
-        for s in states:
-            _, __, hx = self.actor([tf.expand_dims(s, axis = 0), hx], training=False)
-        return tf.tile(hx, [trajectory_length, 1])
+    def networks_rollout(self, states, actions, hx0, trajectory_length):
+        ahx = hx0
+        chx1 = tf.zeros(shape=(1, self.actor_recurrent_layer_size), dtype=tf.float32)
+        chx2 = tf.zeros(shape=(1, self.actor_recurrent_layer_size), dtype=tf.float32)
+        for i in range(len(states)):
+            _, __, ahx = self.actor([tf.expand_dims(states[i], axis = 0), ahx], training=False)
+            _, chx1 = self.critic_1([tf.expand_dims(states[i], axis = 0), tf.expand_dims(actions[i], axis = 0), chx1], training=False)
+            _, chx2 = self.critic_2([tf.expand_dims(states[i], axis = 0), tf.expand_dims(actions[i], axis = 0), chx2], training=False)
+        return tf.tile(chx1, [trajectory_length, 1]), tf.tile(chx2, [trajectory_length, 1])
 
     @tf.function(experimental_relax_shapes=True)
     def get_actions(self, mu, log_sigma):
@@ -101,8 +111,8 @@ class Actor(object):
         return tf.sign(x)*(tf.sqrt(tf.abs(x) + 1) - 1) + self.q_rescaling_epsilone * x
 
     @tf.function(experimental_relax_shapes=True)
-    def get_trajectory_error(self, states, actions, next_states, rewards, gamma_powers, dones, hidden_rnn_states):
-        mu, log_sigma, ___ = self.actor([next_states, hidden_rnn_states], training=False)
+    def get_trajectory_error(self, states, actions, next_states, rewards, gamma_powers, dones, stored_actor_hidden_states, ch1, ch2):
+        mu, log_sigma, ___ = self.actor([next_states, stored_actor_hidden_states], training=False)
         mu = tf.squeeze(mu)
         log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), self.log_std_min, self.log_std_max)
 
@@ -111,15 +121,16 @@ class Actor(object):
         if len(next_actions_shape)  < 2:
             next_actions = tf.expand_dims(next_actions, axis=0)
         
-        next_q = tf.math.minimum(self.critic_1([next_states, next_actions], training=False), \
-                                 self.critic_2([next_states, next_actions], training=False))
+        next_q = tf.math.minimum(self.critic_1([next_states, next_actions, ch1], training=False)[0], \
+                                 self.critic_2([next_states, next_actions, ch2], training=False)[0])
 
-        inverse_q_rescaling = tf.math.pow(self.invertible_function_rescaling(tf.squeeze(next_q, axis=1)), -1)
+        inverse_q_rescaling = 1 / self.invertible_function_rescaling(tf.squeeze(next_q, axis=1))
         target_q = rewards + tf.math.pow(self.gamma, gamma_powers + 1) * (1 - dones) * inverse_q_rescaling
         target_q = self.invertible_function_rescaling(target_q)
 
-        current_q = tf.math.minimum(self.critic_1([states, actions], training=False), \
-                                    self.critic_2([states, actions], training=False))
+        q1, chx1 = self.critic_1([states, actions, ch1], training=False)
+        q2, chx2 = self.critic_2([states, actions, ch2], training=False)
+        current_q = tf.math.minimum(q1, q2)
 
         td_errors = tf.abs(target_q - tf.squeeze(current_q, axis=1))
 

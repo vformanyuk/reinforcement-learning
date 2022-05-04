@@ -44,9 +44,9 @@ if __name__ == '__main__':
                 if cmd[0] == ACTOR_CMD_SEND_REPLAY_DATA: # actor sends replay data
                     replay_data:AgentTransmitionBuffer = replay_data_pipes[cmd[1]][0].recv() # AgentTransmitionBuffer recieved 
                     with data_sync_obj:
-                        for actor_hidden_state, burn_in, states, actions, next_states, rewards, gammas, dones, hidden_states, td_error in replay_data:
+                        for actor_hidden_state, burn_in_states, burn_in_actions, states, actions, next_states, rewards, gammas, dones, hidden_states, td_error in replay_data:
                             # store whole trajectory along with burn-in, actor hidden state and td_error
-                            replay_buffer.store(actor_hidden_state, burn_in, [states, actions, next_states, rewards, gammas, dones, hidden_states], len(rewards), td_error)
+                            replay_buffer.store(actor_hidden_state, [burn_in_states, burn_in_actions], [states, actions, next_states, rewards, gammas, dones, hidden_states], len(rewards), td_error)
                     orchestrator_log(f'Got replay data from actor {cmd[1]}')
                     continue
             except EOFError:
@@ -79,14 +79,15 @@ if __name__ == '__main__':
                     with data_sync_obj:
                         for actor_hidden_state, burn_in, trajectory, is_weights, meta_idx in replay_buffer.sample(trajectories_mini_batch):
                             data.append(actor_hidden_state, 
-                                        burn_in, 
+                                        burn_in[0], 
+                                        burn_in[1], 
                                         trajectory[0], 
                                         trajectory[1], 
                                         trajectory[2], 
                                         trajectory[3], 
                                         trajectory[4], 
                                         trajectory[5], 
-                                        trajectory[6], 
+                                        trajectory[6],
                                         is_weights,
                                         meta_idx)
                     replay_data_pipe.send(data)
@@ -112,7 +113,7 @@ if __name__ == '__main__':
 
     env = gym.make('LunarLanderContinuous-v2')
 
-    trajectories_mini_batch = 128
+    trajectories_mini_batch = 64
 
     actor_learning_rate = 3e-4
     critic_learning_rate = 3e-4

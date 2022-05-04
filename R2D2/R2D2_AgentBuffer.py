@@ -113,13 +113,15 @@ class R2D2_AgentBuffer(object):
 
     def get_data(self, trajectory_idxs):
         for idx in trajectory_idxs:
-            hidden_state_idx = self.trajectories[idx].data[0]
+            hidden_state_idx = self.trajectories[idx].burn_in[0] if len(self.trajectories[idx].burn_in) > 0 else self.trajectories[idx].data[0]
             burn_in_idxs = self.trajectories[idx].burn_in
             states_idxs = self.trajectories[idx].data[:-1]
             trajectory_idxs = self.trajectories[idx].data[1:]
             burn_in_states = tf.stack(self.states_memory[burn_in_idxs]) if len(burn_in_idxs) > 0 else []
+            burn_in_actions = tf.stack(self.actions_memory[burn_in_idxs]) if len(burn_in_idxs) > 0 else []
             yield self.actor_hidden_states_memory[hidden_state_idx], \
                     burn_in_states, \
+                    burn_in_actions, \
                     tf.stack(self.states_memory[states_idxs]), \
                     tf.stack(self.actions_memory[trajectory_idxs]), \
                     tf.stack(self.states_memory[trajectory_idxs]), \

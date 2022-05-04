@@ -9,7 +9,7 @@ from tensorflow import keras
 from time import sleep
 from typing import Tuple
 
-from R2D2.LearningRateDecayScheduler import LearningRateDecay
+# from R2D2.LearningRateDecayScheduler import LearningRateDecay
 from R2D2.DTOs import LearnerTransmitionBuffer
 from R2D2.neural_networks import policy_network, critic_network
 
@@ -59,11 +59,11 @@ class Learner(object):
         tf.random.set_seed(RND_SEED)
         np.random.random(RND_SEED)
 
-        self.actor_lr_scheduler = LearningRateDecay(actor_learning_rate)
-        self.critic_lr_scheduler = LearningRateDecay(critic_learning_rate)
+        # self.actor_lr_scheduler = LearningRateDecay(actor_learning_rate)
+        # self.critic_lr_scheduler = LearningRateDecay(critic_learning_rate)
 
-        self.actor_optimizer = tf.keras.optimizers.Adam(self.actor_lr_scheduler)
-        self.critic_optimizer = tf.keras.optimizers.Adam(self.critic_lr_scheduler)
+        self.actor_optimizer = tf.keras.optimizers.Adam(actor_learning_rate)
+        self.critic_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
         self.alpha_optimizer = tf.keras.optimizers.Adam(3e-4)
         self.mse_loss = tf.keras.losses.MeanSquaredError()
 
@@ -147,8 +147,8 @@ class Learner(object):
 
         while not done:
             mean, log_sigma, actor_hx = self.actor([np.expand_dims(observation, axis = 0), actor_hx], training=False)
-            throttle_action = self.get_actions(mean[0][0], log_sigma[0][0])
-            eng_ctrl_action = self.get_actions(mean[0][1], log_sigma[0][1])
+            throttle_action = self.get_actions(mean[0][0], log_sigma[0][0], self.gaus_distr.sample())
+            eng_ctrl_action = self.get_actions(mean[0][1], log_sigma[0][1], self.gaus_distr.sample())
 
             throttle_e.append(np.log(sqrt_two_p_e * np.exp(log_sigma[0][0])))
             ctrl_e.append(np.log(sqrt_two_p_e * np.exp(log_sigma[0][1])))
@@ -185,17 +185,25 @@ class Learner(object):
             critic_losses = []
 
             # actor_h and meta_idx are single tensors. Others are mini batches of values
-            for actor_h, burn_in_states, states, actions, next_states, rewards, gamma_powers, dones, hidden_states, is_weights, meta_idx in trajectories:
+            for actor_h, burn_in_states, burn_in_actions, states, actions, next_states, rewards, gamma_powers, stored_actor_states, dones, is_weights, meta_idx in trajectories:
+                trajectory_length = tf.convert_to_tensor(len(rewards), dtype=tf.int32)
                 if len(burn_in_states) > 0:
-                    self.actor_burn_in(burn_in_states, actor_h, tf.convert_to_tensor(len(rewards), dtype=tf.int32))
+                    ch1, ch2, target_ch1, target_ch2 = self.networks_rollout(burn_in_states, burn_in_actions, actor_h, trajectory_length)
+                else:
+                    ch1 = tf.zeros(shape=(trajectory_length, self.actor_recurrent_layer_size), dtype=tf.float32)
+                    ch2 = tf.zeros(shape=(trajectory_length, self.actor_recurrent_layer_size), dtype=tf.float32)
+                    target_ch1 = tf.zeros(shape=(trajectory_length, self.actor_recurrent_layer_size), dtype=tf.float32)
+                    target_ch2 = tf.zeros(shape=(trajectory_length, self.actor_recurrent_layer_size), dtype=tf.float32)
+                noise = self.gaus_distr.sample(sample_shape=(len(rewards), 2))
                 for _ in range(self.gradient_step):
-                    critic1_loss, critic2_loss = self.train_critics(hidden_states, states, actions, next_states, rewards, gamma_powers, is_weights, dones)
+                    critic1_loss, critic2_loss, priority = self.train_critics(states, actions, next_states, rewards, gamma_powers, is_weights, dones, 
+                                                                                noise, stored_actor_states, ch1, ch2, target_ch1, target_ch2)
                     critic_losses.append(critic1_loss)
                     critic_losses.append(critic2_loss)
-                    actor_loss = self.train_actor(states, hidden_states)
+                    td_errors[meta_idx] = priority
+                    actor_loss = self.train_actor(states, noise, stored_actor_states, ch1, ch2)
                     actor_losses.append(actor_loss)
                 training_runs += 1
-                td_errors[meta_idx] = self.get_trajectory_error(states, actions, next_states, rewards, gamma_powers, dones, hidden_states)
                 if training_runs % 10 == 0:
                     self.soft_update_models()
             self.log(f'Critic error {np.mean(critic_losses):.4f} Actor error {np.mean(actor_losses):.4f}')
@@ -226,82 +234,95 @@ class Learner(object):
         self.log('training complete.')
     
     @tf.function(experimental_relax_shapes=True)
-    def actor_burn_in(self, states, hx0, trajectory_length):
-        hx = tf.expand_dims(hx0, axis=0)
-        for s in states:
-            _, __, hx = self.actor([tf.expand_dims(s, axis = 0), hx], training=False)
-        return tf.tile(hx, [trajectory_length, 1])
+    def networks_rollout(self, states, actions, hx0, trajectory_length):
+        ahx = hx0
+        chx1 = tf.zeros(shape=(1, self.actor_recurrent_layer_size), dtype=tf.float32)
+        chx2 = tf.zeros(shape=(1, self.actor_recurrent_layer_size), dtype=tf.float32)
+        target_chx1 = tf.zeros(shape=(1, self.actor_recurrent_layer_size), dtype=tf.float32)
+        target_chx2 = tf.zeros(shape=(1, self.actor_recurrent_layer_size), dtype=tf.float32)
+        for i in range(len(states)):
+            _, __, ahx = self.actor([tf.expand_dims(states[i], axis = 0), ahx], training=False)
+            _, chx1 = self.critic1([tf.expand_dims(states[i], axis = 0), tf.expand_dims(actions[i], axis = 0), chx1], training=False)
+            _, chx2 = self.critic2([tf.expand_dims(states[i], axis = 0), tf.expand_dims(actions[i], axis = 0), chx2], training=False)
+            _, target_chx1 = self.target_critic1([tf.expand_dims(states[i], axis = 0), tf.expand_dims(actions[i], axis = 0), target_chx1], training=False)
+            _, target_chx2 = self.target_critic2([tf.expand_dims(states[i], axis = 0), tf.expand_dims(actions[i], axis = 0), target_chx2], training=False)
+        return  tf.tile(chx1, [trajectory_length, 1]), \
+                tf.tile(chx2, [trajectory_length, 1]), \
+                tf.tile(target_chx1, [trajectory_length, 1]), \
+                tf.tile(target_chx2, [trajectory_length, 1])
 
     @tf.function(experimental_relax_shapes=True)
-    def get_actions(self, mu, log_sigma):
-        return tf.math.tanh(mu + tf.math.exp(log_sigma) * self.gaus_distr.sample())
+    def get_actions(self, mu, log_sigma, noise):
+        return tf.math.tanh(mu + tf.math.exp(log_sigma) * noise)
 
     @tf.function(experimental_relax_shapes=True)
-    def get_log_probs(self, mu, sigma, actions):
+    def get_log_probs(self, mu, sigma, actions, noise):
         action_distributions = tfp.distributions.MultivariateNormalDiag(loc=mu, scale_diag=sigma)
-        log_probs = action_distributions.log_prob(mu + sigma*self.gaus_distr.sample()) - tf.reduce_mean(tf.math.log(1 - tf.math.pow(actions, 2) + 1e-6), axis=1)
+        log_probs = action_distributions.log_prob(mu + sigma * noise) - tf.reduce_mean(tf.math.log(1 - tf.math.pow(actions, 2) + 1e-6), axis=1)
         return log_probs
 
     @tf.function(experimental_relax_shapes=True)
-    def actor_burn_in(self, states, hx0, trajectory_length):
-        hx = hx0# hx = tf.expand_dims(hx0, axis=0)
-        for s in states:
-            _, __, hx = self.actor([tf.expand_dims(s, axis = 0), hx], training=False)
-        return tf.tile(hx, [trajectory_length, 1])
-
-    @tf.function(experimental_relax_shapes=True)
-    def train_critics(self, actor_hx, states, actions, next_states, rewards, gamma_powers, is_weights, dones):
-        mu, log_sigma, ___ = self.actor([next_states, actor_hx], training=False)
+    def train_critics(self, states, actions, next_states, rewards, gamma_powers, is_weights, dones, noise,
+                        actor_hs, critic1_hs, critic2_hs, target_critic1_hs, target_critic2_hs):
+        mu, log_sigma, ___ = self.actor([next_states, actor_hs], training=False)
         mu = tf.squeeze(mu)
         log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), self.log_std_min, self.log_std_max)
 
-        target_actions = self.get_actions(mu, log_sigma)
+        target_actions = self.get_actions(mu, log_sigma, noise)
         target_actions_shape = tf.shape(target_actions)
         if len(target_actions_shape)  < 2:
             target_actions = tf.expand_dims(target_actions, axis=0)
 
-        min_q = tf.math.minimum(self.target_critic1([next_states, target_actions], training=False), \
-                                self.target_critic2([next_states, target_actions], training=False))
+        min_q = tf.math.minimum(self.target_critic1([next_states, target_actions, target_critic1_hs], training=False)[0], \
+                                self.target_critic2([next_states, target_actions, target_critic2_hs], training=False)[0])
         min_q = tf.squeeze(min_q, axis=1)
 
         sigma = tf.math.exp(log_sigma)
-        log_probs = self.get_log_probs(mu, sigma, target_actions)
+        log_probs = self.get_log_probs(mu, sigma, target_actions, noise)
         next_values = min_q - tf.math.exp(self.alpha_log) * log_probs
 
+        next_values = 1 / self.invertible_function_rescaling(next_values)
         target_q = rewards + tf.pow(self.gamma, gamma_powers) * (1 - dones) * next_values
+        target_q = self.invertible_function_rescaling(target_q)
 
         with tf.GradientTape() as tape:
-            current_q = self.critic1([states, actions], training=True)
-            c1_loss = 0.5 * tf.reduce_mean(is_weights * tf.pow(target_q - current_q, 2))
+            current_q, _ = self.critic1([states, actions, critic1_hs], training=True)
+            td_error1 = tf.abs(target_q - current_q)
+            c1_loss = 0.5 * tf.reduce_mean(is_weights * tf.pow(td_error1, 2))
         gradients = tape.gradient(c1_loss, self.critic1.trainable_variables)
         self.critic_optimizer.apply_gradients(zip(gradients, self.critic1.trainable_variables))
 
         with tf.GradientTape() as tape:
-            current_q = self.critic2([states, actions], training=True)
-            c2_loss = 0.5 * tf.reduce_mean(is_weights * tf.pow(target_q - current_q, 2))
+            current_q, _ = self.critic2([states, actions, critic2_hs], training=True)
+            td_error2 = tf.abs(target_q - current_q)
+            c2_loss = 0.5 * tf.reduce_mean(is_weights * tf.pow(td_error2, 2))
         gradients = tape.gradient(c2_loss, self.critic2.trainable_variables)
         self.critic_optimizer.apply_gradients(zip(gradients, self.critic2.trainable_variables))
-        return c1_loss, c2_loss
+        
+        td_errors = tf.minimum(td_error1, td_error2)
+        priority = tf.reduce_max(td_errors) * self.trajectory_n + (1 - self.trajectory_n) * tf.reduce_mean(td_errors)
+        
+        return c1_loss, c2_loss, priority
 
     @tf.function(experimental_relax_shapes=True)
-    def train_actor(self, states, hidden_rnn_states):
+    def train_actor(self, states, noise, actor_hs, critic1_hs, critic2_hs):
         alpha = tf.math.exp(self.alpha_log)
         with tf.GradientTape() as tape:
-            mu, log_sigma, ___ = self.actor([states, hidden_rnn_states], training=True)
+            mu, log_sigma, ___ = self.actor([states, actor_hs], training=True)
             mu = tf.squeeze(mu)
             log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), self.log_std_min, self.log_std_max)
 
-            target_actions = self.get_actions(mu, log_sigma)
+            target_actions = self.get_actions(mu, log_sigma, noise)
             target_actions_shape = tf.shape(target_actions)
             if len(target_actions_shape)  < 2:
                 target_actions = tf.expand_dims(target_actions, axis=0)
             
-            target_q = tf.math.minimum(self.critic1([states, target_actions], training=False), \
-                                    self.critic2([states, target_actions], training=False))
+            target_q = tf.math.minimum(self.critic1([states, target_actions, critic1_hs], training=False)[0], \
+                                        self.critic2([states, target_actions, critic2_hs], training=False)[0])
             target_q = tf.squeeze(target_q, axis=1)
             
             sigma = tf.math.exp(log_sigma)
-            log_probs = self.get_log_probs(mu, sigma, target_actions)
+            log_probs = self.get_log_probs(mu, sigma, target_actions, noise)
 
             actor_loss = tf.reduce_mean(alpha * log_probs - target_q)
             
@@ -317,35 +338,6 @@ class Learner(object):
     @tf.function(experimental_relax_shapes=True)
     def invertible_function_rescaling(self, x):
         return tf.sign(x)*(tf.sqrt(tf.abs(x) + 1) - 1) + self.q_rescaling_epsilone * x
-
-    @tf.function(experimental_relax_shapes=True)
-    def get_trajectory_error(self, states, actions, next_states, rewards, gamma_powers, dones, hidden_rnn_states):
-        mu, log_sigma, ___ = self.actor([next_states, hidden_rnn_states], training=False)
-        mu = tf.squeeze(mu)
-        log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), self.log_std_min, self.log_std_max)
-
-        next_actions = self.get_actions(mu, log_sigma)
-        next_actions_shape = tf.shape(next_actions)
-        if len(next_actions_shape)  < 2:
-            next_actions = tf.expand_dims(next_actions, axis=0)
-        
-        next_q = tf.math.minimum(self.critic1([next_states, next_actions], training=False), \
-                                 self.critic2([next_states, next_actions], training=False))
-
-        inverse_q_rescaling = tf.math.pow(self.invertible_function_rescaling(tf.squeeze(next_q, axis=1)), -1)
-        target_q = rewards + tf.math.pow(self.gamma, gamma_powers + 1) * (1 - dones) * inverse_q_rescaling
-        target_q = self.invertible_function_rescaling(target_q)
-
-        current_q = tf.math.minimum(self.critic1([states, actions], training=False), \
-                                    self.critic2([states, actions], training=False))
-
-        td_errors = tf.abs(target_q - tf.squeeze(current_q, axis=1))
-        td_errors_shape = tf.shape(td_errors)
-        if len(td_errors_shape) == 0:
-            return td_errors
-
-        priority = tf.reduce_max(td_errors) * self.trajectory_n + (1-self.trajectory_n)*tf.reduce_mean(td_errors)
-        return priority
 
     def soft_update_models(self):
         target_critic1_weights = self.target_critic1.get_weights()

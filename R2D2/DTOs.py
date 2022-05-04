@@ -1,7 +1,8 @@
 class TransmitionBuffer:
     def __init__(self) -> None:
         self.actor_hx_mem=[]
-        self.burn_in_mem=[]
+        self.burn_in_states_mem=[]
+        self.burn_in_actions_mem=[]
         self.states_mem=[]
         self.actions_mem=[]
         self.next_states_mem=[]
@@ -9,9 +10,10 @@ class TransmitionBuffer:
         self.gamma_powers_mem=[]
         self.dones_mem=[]
         self.iteration_idx = 0
-    def append(self, actor_hx, burn_in, sates, actions, next_states, rewards, gps, dones):
+    def append(self, actor_hx, burn_in_states, burn_in_actions, sates, actions, next_states, rewards, gps, dones):
         self.actor_hx_mem.append(actor_hx)
-        self.burn_in_mem.append(burn_in)
+        self.burn_in_states_mem.append(burn_in_states)
+        self.burn_in_actions_mem.append(burn_in_actions)
         self.states_mem.append(sates)
         self.actions_mem.append(actions)
         self.next_states_mem.append(next_states)
@@ -31,8 +33,8 @@ class AgentTransmitionBuffer(TransmitionBuffer):
         super(AgentTransmitionBuffer, self).__init__()
         self.td_errors_mem = []
         self.hidden_states_mem = []
-    def append(self, actor_hx, burn_in, sates, actions, next_states, rewards, gps, dones, hidden_states, td_error):
-        super(AgentTransmitionBuffer, self).append(actor_hx, burn_in, sates, actions, next_states, rewards, gps, dones)
+    def append(self, actor_hx, burn_in_states, burn_in_actions, sates, actions, next_states, rewards, gps, dones, hidden_states, td_error):
+        super(AgentTransmitionBuffer, self).append(actor_hx, burn_in_states, burn_in_actions, sates, actions, next_states, rewards, gps, dones)
         self.td_errors_mem.append(td_error)
         self.hidden_states_mem.append(hidden_states)
     def __len__(self):
@@ -42,7 +44,8 @@ class AgentTransmitionBuffer(TransmitionBuffer):
         if self.iteration_idx >= self.__len__():
             raise StopIteration
         return self.actor_hx_mem[self.iteration_idx], \
-                self.burn_in_mem[self.iteration_idx], \
+                self.burn_in_states_mem[self.iteration_idx], \
+                self.burn_in_actions_mem[self.iteration_idx], \
                 self.states_mem[self.iteration_idx], \
                 self.actions_mem[self.iteration_idx], \
                 self.next_states_mem[self.iteration_idx], \
@@ -58,8 +61,8 @@ class LearnerTransmitionBuffer(TransmitionBuffer):
         self.is_weights_mem = []
         self.meta_idxs_mem = []
         self.hidden_states_mem = []
-    def append(self, actor_hx, burn_in, sates, actions, next_states, rewards, gps, dones, hidden_states, is_weights, meta_idxs):
-        super(LearnerTransmitionBuffer, self).append(actor_hx, burn_in, sates, actions, next_states, rewards, gps, dones)
+    def append(self, actor_hx, burn_in_states, burn_in_actions, sates, actions, next_states, rewards, gps, dones, hidden_states, is_weights, meta_idxs):
+        super(LearnerTransmitionBuffer, self).append(actor_hx, burn_in_states, burn_in_actions, sates, actions, next_states, rewards, gps, dones)
         self.is_weights_mem.append(is_weights)
         self.meta_idxs_mem.append(meta_idxs)
         self.hidden_states_mem.append(hidden_states)
@@ -70,7 +73,8 @@ class LearnerTransmitionBuffer(TransmitionBuffer):
         if self.iteration_idx >= self.__len__():
             raise StopIteration
         return self.actor_hx_mem[self.iteration_idx], \
-                self.burn_in_mem[self.iteration_idx], \
+                self.burn_in_states_mem[self.iteration_idx], \
+                self.burn_in_actions_mem[self.iteration_idx], \
                 self.states_mem[self.iteration_idx], \
                 self.actions_mem[self.iteration_idx], \
                 self.next_states_mem[self.iteration_idx], \
