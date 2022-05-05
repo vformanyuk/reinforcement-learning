@@ -160,9 +160,9 @@ class Learner(object):
             episodic_reward += reward
             episode_step += 1
         env.close()
-        if episodic_reward > 0:
-            self.actor_lr_scheduler.decay()
-            self.critic_lr_scheduler.decay()
+        # if episodic_reward > 0:
+        #     self.actor_lr_scheduler.decay()
+        #     self.critic_lr_scheduler.decay()
         self.log(f'Validation run: {episode_step} steps, total reward = {episodic_reward}, throttle_e = {np.mean(throttle_e):.4f}, ctrl_e = {np.mean(ctrl_e):.4f}')
         return episodic_reward
 
@@ -185,7 +185,7 @@ class Learner(object):
             critic_losses = []
 
             # actor_h and meta_idx are single tensors. Others are mini batches of values
-            for actor_h, burn_in_states, burn_in_actions, states, actions, next_states, rewards, gamma_powers, stored_actor_states, dones, is_weights, meta_idx in trajectories:
+            for actor_h, burn_in_states, burn_in_actions, states, actions, next_states, rewards, gamma_powers, dones, stored_actor_states, is_weights, meta_idx in trajectories:
                 trajectory_length = tf.convert_to_tensor(len(rewards), dtype=tf.int32)
                 if len(burn_in_states) > 0:
                     ch1, ch2, target_ch1, target_ch2 = self.networks_rollout(burn_in_states, burn_in_actions, actor_h, trajectory_length)
