@@ -84,6 +84,7 @@ class Learner(object):
             print("Actor Model restored from checkpoint.")
         else:
             self.actor = policy_network(state_space_shape, action_space_shape[0], self.actor_recurrent_layer_size)
+        self.validation_actor = policy_network(state_space_shape, action_space_shape[0], self.actor_recurrent_layer_size)
 
         if os.path.isfile(self.critic1_network_file):
             self.critic1 = keras.models.load_model(self.critic1_network_file)
@@ -145,8 +146,10 @@ class Learner(object):
         throttle_e = []
         ctrl_e = []
 
+        self.validation_actor.set_weights(self.actor.get_weights())
+
         while not done:
-            mean, log_sigma, actor_hx = self.actor([np.expand_dims(observation, axis = 0), actor_hx], training=False)
+            mean, log_sigma, actor_hx = self.validation_actor([np.expand_dims(observation, axis = 0), actor_hx], training=False)
             throttle_action = self.get_actions(mean[0][0], log_sigma[0][0], self.gaus_distr.sample())
             eng_ctrl_action = self.get_actions(mean[0][1], log_sigma[0][1], self.gaus_distr.sample())
 
