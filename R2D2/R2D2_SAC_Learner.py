@@ -237,7 +237,7 @@ class Learner(object):
         self.critic2_gradients[8].assign(tf.zeros(shape=(1,)), read_value=False)
 
     def apply_grads(self):
-        self.alpha_optimizer.apply_gradients([(self.alpha_gradient, self.alpha_log)])
+        self.alpha_optimizer.apply_gradients([(self.alpha_gradients, self.alpha_log)])
         self.actor_optimizer.apply_gradients(zip(self.actor_gradients, self.actor.trainable_variables))
         self.critic1_optimizer.apply_gradients(zip(self.critic1_gradients, self.critic1.trainable_variables))
         self.critic2_optimizer.apply_gradients(zip(self.critic2_gradients, self.critic2.trainable_variables))
