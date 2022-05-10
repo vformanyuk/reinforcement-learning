@@ -63,49 +63,14 @@ class Learner(object):
         # self.critic_lr_scheduler = LearningRateDecay(critic_learning_rate)
 
         self.actor_optimizer = tf.keras.optimizers.Adam(actor_learning_rate)
-        self.critic1_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
-        self.critic2_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
+        self.critic_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
         self.alpha_optimizer = tf.keras.optimizers.Adam(3e-4)
         self.mse_loss = tf.keras.losses.MeanSquaredError()
-
-        self.actor_gradients = [tf.Variable(tf.zeros(shape=(8, 768)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(256, 768)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(2, 768)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(256, 256)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(256,)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(256, 128)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(128,)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(128, 2)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(2,)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(128, 2)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(2,)), trainable=False, dtype=tf.float32)]
-
-        self.critic1_gradients = [tf.Variable(tf.zeros(shape=(8, 768)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(256, 768)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(2, 768)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(258, 256)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(256,)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(256, 128)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(128, )), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(128, 1)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(1,)), trainable=False, dtype=tf.float32)]
-
-        self.critic2_gradients = [tf.Variable(tf.zeros(shape=(8, 768)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(256, 768)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(2, 768)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(258, 256)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(256,)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(256, 128)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(128, )), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(128, 1)), trainable=False, dtype=tf.float32),
-                                tf.Variable(tf.zeros(shape=(1,)), trainable=False, dtype=tf.float32)]
 
         self.gaus_distr = tfp.distributions.Normal(0,1)
 
         self.alpha_log = tf.Variable(0.5, dtype = tf.float32, trainable=True)
-        self.alpha_gradient = tf.Variable(0.0, dtype = tf.float32, trainable=False)
         self.target_entropy = -2
-
         self.actor_recurrent_layer_size = 256
 
         self.actor_network_file = "r2d2-sac-learner-actor.h5"
@@ -201,47 +166,6 @@ class Learner(object):
         self.log(f'Validation run: {episode_step} steps, total reward = {episodic_reward}, throttle_e = {np.mean(throttle_e):.4f}, ctrl_e = {np.mean(ctrl_e):.4f}')
         return episodic_reward
 
-    def zero_grads(self):
-        # alpha gradients
-        self.alpha_gradient.assign(0.0, read_value=False)
-        # actor gradients
-        self.actor_gradients[0].assign(tf.zeros(shape=(8, 768)), read_value=False)
-        self.actor_gradients[1].assign(tf.zeros(shape=(256, 768)), read_value=False)
-        self.actor_gradients[2].assign(tf.zeros(shape=(2, 768)), read_value=False)
-        self.actor_gradients[3].assign(tf.zeros(shape=(256, 256)), read_value=False)
-        self.actor_gradients[4].assign(tf.zeros(shape=(256,)), read_value=False)
-        self.actor_gradients[5].assign(tf.zeros(shape=(256, 128)), read_value=False)
-        self.actor_gradients[6].assign(tf.zeros(shape=(128,)), read_value=False)
-        self.actor_gradients[7].assign(tf.zeros(shape=(128, 2)), read_value=False)
-        self.actor_gradients[8].assign(tf.zeros(shape=(2,)), read_value=False)
-        self.actor_gradients[9].assign(tf.zeros(shape=(128, 2)), read_value=False)
-        self.actor_gradients[10].assign(tf.zeros(shape=(2,)), read_value=False)
-        #critic gradients
-        self.critic1_gradients[0].assign(tf.zeros(shape=(8, 768)), read_value=False)
-        self.critic2_gradients[0].assign(tf.zeros(shape=(8, 768)), read_value=False)
-        self.critic1_gradients[1].assign(tf.zeros(shape=(256, 768)), read_value=False)
-        self.critic2_gradients[1].assign(tf.zeros(shape=(256, 768)), read_value=False)
-        self.critic1_gradients[2].assign(tf.zeros(shape=(2, 768)), read_value=False)
-        self.critic2_gradients[2].assign(tf.zeros(shape=(2, 768)), read_value=False)
-        self.critic1_gradients[3].assign(tf.zeros(shape=(258, 256)), read_value=False)
-        self.critic2_gradients[3].assign(tf.zeros(shape=(258, 256)), read_value=False)
-        self.critic1_gradients[4].assign(tf.zeros(shape=(256,)), read_value=False)
-        self.critic2_gradients[4].assign(tf.zeros(shape=(256,)), read_value=False)
-        self.critic1_gradients[5].assign(tf.zeros(shape=(256, 128)), read_value=False)
-        self.critic2_gradients[5].assign(tf.zeros(shape=(256, 128)), read_value=False)
-        self.critic1_gradients[6].assign(tf.zeros(shape=(128,)), read_value=False)
-        self.critic2_gradients[6].assign(tf.zeros(shape=(128,)), read_value=False)
-        self.critic1_gradients[7].assign(tf.zeros(shape=(128, 1)), read_value=False)
-        self.critic2_gradients[7].assign(tf.zeros(shape=(128, 1)), read_value=False)
-        self.critic1_gradients[8].assign(tf.zeros(shape=(1,)), read_value=False)
-        self.critic2_gradients[8].assign(tf.zeros(shape=(1,)), read_value=False)
-
-    def apply_grads(self):
-        self.alpha_optimizer.apply_gradients([(self.alpha_gradients, self.alpha_log)])
-        self.actor_optimizer.apply_gradients(zip(self.actor_gradients, self.actor.trainable_variables))
-        self.critic1_optimizer.apply_gradients(zip(self.critic1_gradients, self.critic1.trainable_variables))
-        self.critic2_optimizer.apply_gradients(zip(self.critic2_gradients, self.critic2.trainable_variables))
-
     def run(self):
         self.cmd_pipe.send(CMD_SET_NETWORK_WEIGHTS) #initial target networks distribution
         self.weights_pipe.send([self.actor.get_weights(), self.critic1.get_weights(), self.critic2.get_weights(), self.alpha_log.numpy()])
@@ -259,7 +183,6 @@ class Learner(object):
             td_errors = dict()
             actor_losses = []
             critic_losses = []
-            self.zero_grads()
 
             # actor_h and meta_idx are single tensors. Others are mini batches of values
             for actor_h, burn_in_states, burn_in_actions, states, actions, next_states, rewards, gamma_powers, dones, stored_actor_states, is_weights, meta_idx in trajectories:
@@ -285,8 +208,6 @@ class Learner(object):
                     self.soft_update_models()
             self.log(f'Critic error {np.mean(critic_losses):.4f} Actor error {np.mean(actor_losses):.4f}')
             
-            self.apply_grads()
-
             reversed_idxs = list(td_errors.keys())
             reversed_idxs.sort(reverse = True)
 
@@ -369,16 +290,14 @@ class Learner(object):
             td_error1 = tf.abs(target_q - current_q)
             c1_loss = 0.5 * tf.reduce_mean(is_weights * tf.pow(td_error1, 2))
         gradients = tape.gradient(c1_loss, self.critic1.trainable_variables)
-        for grad, grad_var in zip(gradients, self.critic1_gradients):
-            grad_var.assign_add(grad, read_value=False)
+        self.critic_optimizer.apply_gradients(zip(gradients, self.critic1.trainable_variables))
 
         with tf.GradientTape() as tape:
             current_q, _ = self.critic2([states, actions, critic2_hs], training=True)
             td_error2 = tf.abs(target_q - current_q)
             c2_loss = 0.5 * tf.reduce_mean(is_weights * tf.pow(td_error2, 2))
         gradients = tape.gradient(c2_loss, self.critic2.trainable_variables)
-        for grad, grad_var in zip(gradients, self.critic2_gradients):
-            grad_var.assign_add(grad, read_value=False)
+        self.critic_optimizer.apply_gradients(zip(gradients, self.critic2.trainable_variables))
         
         td_errors = tf.minimum(td_error1, td_error2)
         priority = tf.reduce_max(td_errors) * self.trajectory_n + (1 - self.trajectory_n) * tf.reduce_mean(td_errors)
@@ -410,11 +329,10 @@ class Learner(object):
             with tf.GradientTape() as alpha_tape:
                 alpha_loss = -tf.reduce_mean(self.alpha_log * tf.stop_gradient(log_probs + self.target_entropy))
             alpha_gradients = alpha_tape.gradient(alpha_loss, self.alpha_log)
-            self.alpha_gradient.assign_add(alpha_gradients, read_value=False)
+            self.alpha_optimizer.apply_gradients([(alpha_gradients, self.alpha_log)])
 
         gradients = tape.gradient(actor_loss, self.actor.trainable_variables)
-        for grad, grad_var in zip(gradients, self.actor_gradients):
-            grad_var.assign_add(grad, read_value=False)
+        self.actor_optimizer.apply_gradients(zip(gradients, self.actor.trainable_variables))
         return actor_loss
 
     @tf.function(experimental_relax_shapes=True)
