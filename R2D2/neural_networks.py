@@ -9,8 +9,8 @@ def policy_network(state_space_shape, outputs_count, actor_recurrent_layer_size)
     hidden_input = keras.layers.Input(shape=(actor_recurrent_layer_size))
 
     rnn_out, hx = keras.layers.GRU(actor_recurrent_layer_size, return_state=True)(input, initial_state=[hidden_input])
-    x = keras.layers.Dense(128, activation='relu')(rnn_out)
-    x = keras.layers.Dense(64, activation='relu')(x)
+    x = keras.layers.Dense(256, activation='relu')(rnn_out)
+    x = keras.layers.Dense(128, activation='relu')(x)
     mean_output = keras.layers.Dense(outputs_count, activation='linear',
                                 kernel_initializer = keras.initializers.RandomUniform(minval=-SAC_INITIALIZER_BOUNDS, maxval=SAC_INITIALIZER_BOUNDS, seed=RND_SEED),
                                 bias_initializer = keras.initializers.RandomUniform(minval=-SAC_INITIALIZER_BOUNDS, maxval=SAC_INITIALIZER_BOUNDS, seed=RND_SEED))(x)
@@ -24,11 +24,10 @@ def policy_network(state_space_shape, outputs_count, actor_recurrent_layer_size)
 def critic_network(state_space_shape, outputs_count, actor_recurrent_layer_size):
     input = keras.layers.Input(shape=(state_space_shape))
     actions_input = keras.layers.Input(shape=(outputs_count))
+    hidden_input = keras.layers.Input(shape=(actor_recurrent_layer_size))
 
-    # x = keras.layers.GRU(actor_recurrent_layer_size)(input) # good alternative
-    x = keras.layers.Flatten()(input)
-    x = keras.layers.Dense(actor_recurrent_layer_size)(x)
-    x = keras.layers.Concatenate()([x, actions_input])
+    rnn_out, hx = keras.layers.GRU(actor_recurrent_layer_size, return_state=True)(input, initial_state=[hidden_input])
+    x = keras.layers.Concatenate()([rnn_out, actions_input])
 
     x = keras.layers.Dense(256, activation='relu')(x)
     x = keras.layers.Dense(128, activation='relu')(x)
@@ -36,5 +35,5 @@ def critic_network(state_space_shape, outputs_count, actor_recurrent_layer_size)
                                 kernel_initializer = keras.initializers.RandomUniform(minval=-SAC_INITIALIZER_BOUNDS, maxval=SAC_INITIALIZER_BOUNDS, seed=RND_SEED),
                                 bias_initializer = keras.initializers.RandomUniform(minval=-SAC_INITIALIZER_BOUNDS, maxval=SAC_INITIALIZER_BOUNDS, seed=RND_SEED))(x)
 
-    model = keras.Model(inputs=[input, actions_input], outputs=q_layer)
+    model = keras.Model(inputs=[input, actions_input, hidden_input], outputs=[q_layer, hx])
     return model
