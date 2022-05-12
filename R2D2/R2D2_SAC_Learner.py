@@ -46,6 +46,8 @@ class Learner(object):
         self.stack_size = 4
         self.trajectory_n = 0.9
         self.q_rescaling_epsilone = tf.constant(1e-6, dtype=tf.float32)
+        self.action_space_shape = action_space_shape
+        self.state_space_shape = state_space_shape
 
         self.cmd_pipe = cmd_pipe
         self.weights_pipe = weights_pipe
@@ -84,7 +86,6 @@ class Learner(object):
             print("Actor Model restored from checkpoint.")
         else:
             self.actor = policy_network(state_space_shape, action_space_shape[0], self.actor_recurrent_layer_size)
-        self.validation_actor = policy_network(state_space_shape, action_space_shape[0], self.actor_recurrent_layer_size)
 
         if os.path.isfile(self.critic1_network_file):
             self.critic1 = keras.models.load_model(self.critic1_network_file)
@@ -146,7 +147,8 @@ class Learner(object):
         throttle_e = []
         ctrl_e = []
 
-        self.validation_actor.set_weights(self.actor.get_weights())
+        validation_actor = policy_network(self.state_space_shape, self.action_space_shape[0], self.actor_recurrent_layer_size)
+        validation_actor.set_weights(self.actor.get_weights())
 
         while not done:
             mean, log_sigma, actor_hx = self.validation_actor([np.expand_dims(observation, axis = 0), actor_hx], training=False)
@@ -163,9 +165,8 @@ class Learner(object):
             episodic_reward += reward
             episode_step += 1
         env.close()
-        # if episodic_reward > 0:
-        #     self.actor_lr_scheduler.decay()
-        #     self.critic_lr_scheduler.decay()
+        if episodic_reward > 200:
+            validation_actor.save("lunar_lander_r2d2_sac.h5")
         self.log(f'Validation run: {episode_step} steps, total reward = {episodic_reward}, throttle_e = {np.mean(throttle_e):.4f}, ctrl_e = {np.mean(ctrl_e):.4f}')
         return episodic_reward
 
@@ -199,13 +200,14 @@ class Learner(object):
                     target_ch2 = tf.zeros(shape=(trajectory_length, self.actor_recurrent_layer_size), dtype=tf.float32)
                 noise = self.gaus_distr.sample(sample_shape=(len(rewards), 2))
                 for _ in range(self.gradient_step):
+                    actor_loss, next_hidden_states = self.train_actor(states, noise, stored_actor_states, ch1, ch2)
+                    actor_losses.append(actor_loss)
+
                     critic1_loss, critic2_loss, priority = self.train_critics(states, actions, next_states, rewards, gamma_powers, is_weights, dones, 
-                                                                                noise, stored_actor_states, ch1, ch2, target_ch1, target_ch2)
+                                                                                noise, next_hidden_states, ch1, ch2, target_ch1, target_ch2)
                     critic_losses.append(critic1_loss)
                     critic_losses.append(critic2_loss)
                     td_errors[meta_idx] = priority
-                    actor_loss = self.train_actor(states, noise, stored_actor_states, ch1, ch2)
-                    actor_losses.append(actor_loss)
                 training_runs += 1
                 if training_runs % 10 == 0:
                     self.soft_update_models()
@@ -311,7 +313,7 @@ class Learner(object):
     def train_actor(self, states, noise, actor_hs, critic1_hs, critic2_hs):
         alpha = tf.math.exp(self.alpha_log)
         with tf.GradientTape() as tape:
-            mu, log_sigma, ___ = self.actor([states, actor_hs], training=True)
+            mu, log_sigma, next_hidden_states = self.actor([states, actor_hs], training=True)
             mu = tf.squeeze(mu)
             log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), self.log_std_min, self.log_std_max)
 
@@ -336,7 +338,7 @@ class Learner(object):
 
         gradients = tape.gradient(actor_loss, self.actor.trainable_variables)
         self.actor_optimizer.apply_gradients(zip(gradients, self.actor.trainable_variables))
-        return actor_loss
+        return actor_loss, next_hidden_states
 
     @tf.function(experimental_relax_shapes=True)
     def invertible_function_rescaling(self, x):
