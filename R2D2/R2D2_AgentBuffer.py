@@ -118,9 +118,10 @@ class R2D2_AgentBuffer(object):
     def get_remaining_trajectories(self):
         for idx, trajectory in enumerate(self.trajectories):
             if idx not in self.sent_trajectories and not trajectory.writing_burn_in:
-                trajectory.fix_trajectory()
+                is_trajectory_complete = trajectory.is_complete()
+                trajectory.fix_trajectory() # truncates trajectory makes it complete. Check before fixing
                 yield idx
-                if not trajectory.is_complete(): # stop producing trajectories after first incomplete met
+                if not is_trajectory_complete: # stop producing trajectories after first incomplete met
                     break
 
     def get_data(self, trajectory_idxs):
