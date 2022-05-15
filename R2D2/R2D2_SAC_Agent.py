@@ -120,17 +120,17 @@ class Actor(object):
         next_actions_shape = tf.shape(next_actions)
         if len(next_actions_shape)  < 2:
             next_actions = tf.expand_dims(next_actions, axis=0)
+
+        q1, next_chx1 = self.critic_1([states, actions, ch1], training=False)
+        q2, next_chx2 = self.critic_2([states, actions, ch2], training=False)
+        current_q = tf.math.minimum(q1, q2)
         
-        next_q = tf.math.minimum(self.critic_1([next_states, next_actions, ch1], training=False)[0], \
-                                 self.critic_2([next_states, next_actions, ch2], training=False)[0])
+        next_q = tf.math.minimum(self.critic_1([next_states, next_actions, next_chx1], training=False)[0], \
+                                 self.critic_2([next_states, next_actions, next_chx2], training=False)[0])
 
         inverse_q_rescaling = 1 / self.invertible_function_rescaling(tf.squeeze(next_q, axis=1))
         target_q = rewards + tf.math.pow(self.gamma, gamma_powers + 1) * (1 - dones) * inverse_q_rescaling
         target_q = self.invertible_function_rescaling(target_q)
-
-        q1, chx1 = self.critic_1([states, actions, ch1], training=False)
-        q2, chx2 = self.critic_2([states, actions, ch2], training=False)
-        current_q = tf.math.minimum(q1, q2)
 
         td_errors = tf.abs(target_q - tf.squeeze(current_q, axis=1))
 
@@ -206,9 +206,6 @@ class Actor(object):
                 state0 = next_observation[-1:][0]
 
                 exp_buffer.store(actor_hx, observation, [throttle_action, eng_ctrl_action], reward, float(done))
-
-                # if (epoch_steps % (self.trajectory_length + self.burn_in_length + self.N) == 0 and len(exp_buffer) > 0) or done:
-                #     self.prepare_and_send_replay_data(exp_buffer, 1)
 
                 if done:
                     self.prepare_and_send_replay_data(exp_buffer, exp_buffer.get_remaining_trajectories())
