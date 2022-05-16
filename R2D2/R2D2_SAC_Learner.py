@@ -286,21 +286,22 @@ class Learner(object):
         log_probs = self.get_log_probs(mu, sigma, target_actions, noise)
         next_values = min_q - tf.math.exp(self.alpha_log) * log_probs
 
-        next_values = 1 / self.invertible_function_rescaling(next_values)
-        target_q = rewards + tf.pow(self.gamma, gamma_powers) * (1 - dones) * next_values
-        target_q = self.invertible_function_rescaling(target_q)
+        target_q = rewards + tf.pow(self.gamma, gamma_powers + 1) * (1 - dones) * next_values
+        
+        priority_q = rewards + tf.pow(self.gamma, gamma_powers) * (1 - dones) / self.invertible_function_rescaling(next_values) # h(x)^-1
+        priority_q = self.invertible_function_rescaling(priority_q)
 
         with tf.GradientTape() as tape:
             current_q, _ = self.critic1([states, actions, critic1_hs], training=True)
-            td_error1 = tf.abs(target_q - current_q)
-            c1_loss = 0.5 * tf.reduce_mean(is_weights * tf.pow(td_error1, 2))
+            td_error1 = tf.abs(priority_q - current_q)
+            c1_loss = tf.reduce_mean(is_weights * tf.pow(target_q - current_q, 2))
         gradients = tape.gradient(c1_loss, self.critic1.trainable_variables)
         self.critic_optimizer.apply_gradients(zip(gradients, self.critic1.trainable_variables))
 
         with tf.GradientTape() as tape:
             current_q, _ = self.critic2([states, actions, critic2_hs], training=True)
-            td_error2 = tf.abs(target_q - current_q)
-            c2_loss = 0.5 * tf.reduce_mean(is_weights * tf.pow(td_error2, 2))
+            td_error2 = tf.abs(priority_q - current_q)
+            c2_loss = tf.reduce_mean(is_weights * tf.pow(target_q - current_q, 2))
         gradients = tape.gradient(c2_loss, self.critic2.trainable_variables)
         self.critic_optimizer.apply_gradients(zip(gradients, self.critic2.trainable_variables))
         
