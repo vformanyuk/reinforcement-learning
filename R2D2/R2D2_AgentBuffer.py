@@ -28,7 +28,7 @@ class Trajectory:
         return self.write_idx >= len(self.data)
 
     def is_n_backup_complete(self, buffer_idx) -> bool:
-        return self.write_idx >= len(self.data) and self.data[-1] + self.n_backup >= buffer_idx
+        return self.write_idx >= len(self.data) and buffer_idx >= self.data[-1] + self.n_backup
 
     def fix_trajectory(self):
         if self.writing_burn_in:
