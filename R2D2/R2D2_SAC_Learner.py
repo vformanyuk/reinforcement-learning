@@ -11,7 +11,7 @@ from typing import Tuple
 
 # from R2D2.LearningRateDecayScheduler import LearningRateDecay
 from R2D2.DTOs import LearnerTransmitionBuffer
-from R2D2.neural_networks import policy_network, critic_network
+from R2D2.neural_networks import policy_network, critic_network, value_network
 
 CMD_SET_NETWORK_WEIGHTS = 0
 CMD_GET_REPLAY_DATA = 1
@@ -66,6 +66,7 @@ class Learner(object):
 
         self.actor_optimizer = tf.keras.optimizers.Adam(actor_learning_rate)
         self.critic_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
+        self.value_optimizer = tf.keras.optimizers.Adam(3e-4)
         self.alpha_optimizer = tf.keras.optimizers.Adam(3e-4)
         self.mse_loss = tf.keras.losses.MeanSquaredError()
 
@@ -73,13 +74,14 @@ class Learner(object):
 
         self.alpha_log = tf.Variable(0.5, dtype = tf.float32, trainable=True)
         self.target_entropy = -2
-        self.actor_recurrent_layer_size = 256
+        self.actor_recurrent_layer_size = 512
 
         self.actor_network_file = "r2d2-sac-learner-actor.h5"
         self.critic1_network_file = "r2d2-sac-learner-critic1.h5"
         self.target_critic1_network_file = "r2d2-sac-learner-target_critic1.h5"
         self.critic2_network_file = "r2d2-sac-learner-critic2.h5"
         self.target_critic2_network_file = "r2d2-sac-learner-target_critic2.h5"
+        self.value_network_file = "r2d2-sac-value.h5"
 
         if os.path.isfile(self.actor_network_file):
             self.actor = keras.models.load_model(self.actor_network_file)
@@ -110,6 +112,12 @@ class Learner(object):
         else:
             self.target_critic2 = critic_network(state_space_shape, action_space_shape[0], self.actor_recurrent_layer_size)
             self.target_critic2.set_weights(self.critic2.get_weights())
+
+        if os.path.isfile(self.value_network_file):
+            self.value_net = keras.models.load_model(self.value_network_file)
+            print("Value Model restored from checkpoint.")
+        else:
+            self.value_net = value_network(state_space_shape)
 
     def interpolation_step(self, env, s0, action, stack_size=4):
         result_states = []
@@ -151,7 +159,7 @@ class Learner(object):
         validation_actor.set_weights(self.actor.get_weights())
 
         while not done:
-            mean, log_sigma, actor_hx = self.validation_actor([np.expand_dims(observation, axis = 0), actor_hx], training=False)
+            mean, log_sigma, actor_hx = validation_actor([np.expand_dims(observation, axis = 0), actor_hx], training=False)
             throttle_action = self.get_actions(mean[0][0], log_sigma[0][0], self.gaus_distr.sample())
             eng_ctrl_action = self.get_actions(mean[0][1], log_sigma[0][1], self.gaus_distr.sample())
 
@@ -172,7 +180,7 @@ class Learner(object):
 
     def run(self):
         self.cmd_pipe.send(CMD_SET_NETWORK_WEIGHTS) #initial target networks distribution
-        self.weights_pipe.send([self.actor.get_weights(), self.critic1.get_weights(), self.critic2.get_weights(), self.alpha_log.numpy()])
+        self.weights_pipe.send([self.actor.get_weights(), self.critic1.get_weights(), self.critic2.get_weights(), self.value_net.get_weights(), self.alpha_log.numpy()])
 
         while self.buffer_ready_flag.value < 1:
             sleep(1)
@@ -187,6 +195,7 @@ class Learner(object):
             td_errors = dict()
             actor_losses = []
             critic_losses = []
+            value_losses = []
 
             # actor_h and meta_idx are single tensors. Others are mini batches of values
             for actor_h, burn_in_states, burn_in_actions, states, actions, next_states, rewards, gamma_powers, dones, stored_actor_states, is_weights, meta_idx in trajectories:
@@ -200,7 +209,8 @@ class Learner(object):
                     target_ch2 = tf.zeros(shape=(trajectory_length, self.actor_recurrent_layer_size), dtype=tf.float32)
                 noise = self.gaus_distr.sample(sample_shape=(len(rewards), 2))
                 for _ in range(self.gradient_step):
-                    actor_loss, next_hidden_states = self.train_actor(states, noise, stored_actor_states, ch1, ch2)
+                    actor_loss, value_loss, next_hidden_states = self.train_actor_and_value(states, noise, stored_actor_states, ch1, ch2)
+                    value_losses.append(value_loss)
                     actor_losses.append(actor_loss)
 
                     critic1_loss, critic2_loss, priority = self.train_critics(states, actions, next_states, rewards, gamma_powers, is_weights, dones, 
@@ -209,9 +219,8 @@ class Learner(object):
                     critic_losses.append(critic2_loss)
                     td_errors[meta_idx] = priority
                 training_runs += 1
-                if training_runs % 10 == 0:
-                    self.soft_update_models()
-            self.log(f'Critic error {np.mean(critic_losses):.4f} Actor error {np.mean(actor_losses):.4f}')
+                self.soft_update_models()
+            self.log(f'Critic error {np.mean(critic_losses):.4f} Value error {np.mean(value_losses):.4f} Actor error {np.mean(actor_losses):.4f}')
             
             reversed_idxs = list(td_errors.keys())
             reversed_idxs.sort(reverse = True)
@@ -227,13 +236,14 @@ class Learner(object):
                     self.cancellation_token.value = 1
             if training_runs % self.networks_transmite_step == 0:
                 self.cmd_pipe.send(CMD_SET_NETWORK_WEIGHTS)
-                self.weights_pipe.send([self.actor.get_weights(), self.critic1.get_weights(), self.critic2.get_weights(), self.alpha_log])
+                self.weights_pipe.send([self.actor.get_weights(), self.critic1.get_weights(), self.critic2.get_weights(), self.value_net.get_weights(), self.alpha_log])
             if training_runs % self.checkpoint_step == 0:
                 self.actor.save(self.actor_network_file)
                 self.critic1.save(self.critic1_network_file)
                 self.critic2.save(self.critic2_network_file)
                 self.target_critic1.save(self.target_critic1_network_file)
                 self.target_critic2.save(self.target_critic2_network_file)
+                self.value_net.save(self.value_network_file)
                 self.log(f'Checkpoint saved on {training_runs} step')
             
         self.log('training complete.')
@@ -287,31 +297,32 @@ class Learner(object):
         next_values = min_q - tf.math.exp(self.alpha_log) * log_probs
 
         target_q = rewards + tf.pow(self.gamma, gamma_powers + 1) * (1 - dones) * next_values
-        
-        priority_q = rewards + tf.pow(self.gamma, gamma_powers) * (1 - dones) / self.invertible_function_rescaling(next_values) # h(x)^-1
-        priority_q = self.invertible_function_rescaling(priority_q)
 
         with tf.GradientTape() as tape:
-            current_q, _ = self.critic1([states, actions, critic1_hs], training=True)
-            td_error1 = tf.abs(priority_q - current_q)
-            c1_loss = tf.reduce_mean(is_weights * tf.pow(target_q - current_q, 2))
+            current_q1, _ = self.critic1([states, actions, critic1_hs], training=True)
+            c1_loss = tf.reduce_mean(is_weights * tf.pow(target_q - current_q1, 2))
         gradients = tape.gradient(c1_loss, self.critic1.trainable_variables)
         self.critic_optimizer.apply_gradients(zip(gradients, self.critic1.trainable_variables))
 
         with tf.GradientTape() as tape:
-            current_q, _ = self.critic2([states, actions, critic2_hs], training=True)
-            td_error2 = tf.abs(priority_q - current_q)
-            c2_loss = tf.reduce_mean(is_weights * tf.pow(target_q - current_q, 2))
+            current_q2, _ = self.critic2([states, actions, critic2_hs], training=True)
+            c2_loss = tf.reduce_mean(is_weights * tf.pow(target_q - current_q2, 2))
         gradients = tape.gradient(c2_loss, self.critic2.trainable_variables)
-        self.critic_optimizer.apply_gradients(zip(gradients, self.critic2.trainable_variables))
-        
-        td_errors = tf.minimum(td_error1, td_error2)
+        self.critic_optimizer.apply_gradients(zip(gradients, self.critic2.trainable_variables))\
+
+        target_v_estimation = self.value_net(next_states, training = False)
+
+        inverse_v_rescaling = 1 / self.invertible_function_rescaling(tf.squeeze(target_v_estimation, axis=1))
+        target_v = rewards + tf.math.pow(self.gamma, gamma_powers + 1) * (1 - dones) * inverse_v_rescaling
+        target_v = self.invertible_function_rescaling(target_v)
+
+        td_errors = tf.abs(target_v - tf.squeeze(tf.minimum(current_q1, current_q2), axis=1))
         priority = tf.reduce_max(td_errors) * self.trajectory_n + (1 - self.trajectory_n) * tf.reduce_mean(td_errors)
         
         return c1_loss, c2_loss, priority
 
     @tf.function(experimental_relax_shapes=True)
-    def train_actor(self, states, noise, actor_hs, critic1_hs, critic2_hs):
+    def train_actor_and_value(self, states, noise, actor_hs, critic1_hs, critic2_hs):
         alpha = tf.math.exp(self.alpha_log)
         with tf.GradientTape() as tape:
             mu, log_sigma, next_hidden_states = self.actor([states, actor_hs], training=True)
@@ -339,7 +350,15 @@ class Learner(object):
 
         gradients = tape.gradient(actor_loss, self.actor.trainable_variables)
         self.actor_optimizer.apply_gradients(zip(gradients, self.actor.trainable_variables))
-        return actor_loss, next_hidden_states
+
+        with tf.GradientTape() as value_tape:
+            target_v = target_q - log_probs
+            current_v = self.value_net(states, training=True)
+            value_loss = self.mse_loss(current_v, target_v)
+        value_gradient = value_tape.gradient(value_loss, self.value_net.trainable_variables)
+        self.value_optimizer.apply_gradients(zip(value_gradient, self.value_net.trainable_variables))
+
+        return actor_loss, value_loss, next_hidden_states
 
     @tf.function(experimental_relax_shapes=True)
     def invertible_function_rescaling(self, x):
