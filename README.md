@@ -17,6 +17,7 @@ It is representative and doesn't skip frames like some other envs.
 * [Deep Deterministic Policy Gradient (DDPG)](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_DDPG.py)
 * [Twin Delayed Deep Deterministic policy gradient (TD3)](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_TD3.py)
 * [Soft Actor-Critic (SAC)](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_SAC.py)
+* [Soft Actor-Critic with Emphasizing Recent Experience](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_SAC_ERE.py)
 * APE-X DPG
   * [Orchestrator](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_ape-x.py)
   * [DPG Actor](https://github.com/vformanyuk/reinforcement-learning/blob/master/APEX/dpg_actor_slim.py)
