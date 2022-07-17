@@ -334,3 +334,4 @@ ASALocalRun/
 *.h5
 
 checkpoints/
+utility_scripts/
