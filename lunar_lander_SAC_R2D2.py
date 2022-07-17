@@ -5,7 +5,7 @@ import tensorflow as tf
 from time import sleep
 
 from R2D2.R2D2_TrajectoryStore import R2D2_TrajectoryStore
-from R2D2.neural_networks import policy_network, critic_network, value_network
+from R2D2.neural_networks import policy_network, critic_network
 from R2D2.R2D2_SAC_Agent import RunActor
 from R2D2.R2D2_SAC_Learner import RunLearner
 from R2D2.DTOs import AgentTransmitionBuffer, LearnerTransmitionBuffer
@@ -28,8 +28,9 @@ if __name__ == '__main__':
         if orchestrator_debug_mode or force:
             print(f'[Orchestrator ({os.getpid()})] {msg}')
 
-    def actor_cmd_processor(actor, critic1, critic2, value_net, replay_buffer:R2D2_TrajectoryStore, \
+    def actor_cmd_processor(actor, critic1, critic2, replay_buffer:R2D2_TrajectoryStore, \
                             cmd_pipe, actor_weight_pipes, replay_data_pipes, net_sync_obj, data_sync_obj):
+        global alpha_log
         connection_alive = True
         while connection_alive:
             try:
@@ -37,7 +38,7 @@ if __name__ == '__main__':
                 orchestrator_log(f'Got actor {cmd[1]} command {cmd[0]}')
                 if cmd[0] == ACTOR_CMD_GET_NETWORKS: # actor requested networks update
                     with net_sync_obj:
-                        actor_weight_pipes[cmd[1]][1].send([actor.get_weights(), critic1.get_weights(), critic2.get_weights(), value_net.get_weights()])
+                        actor_weight_pipes[cmd[1]][1].send([actor.get_weights(), critic1.get_weights(), critic2.get_weights()])
                     orchestrator_log(f'Sent target weights for actor {cmd[1]}')
                     continue
                 if cmd[0] == ACTOR_CMD_SEND_REPLAY_DATA: # actor sends replay data
@@ -55,9 +56,10 @@ if __name__ == '__main__':
                 print('[Orchestrator] Client pipe handle closed.')
                 connection_alive = False
 
-    def learner_cmd_processor(actor, critic1, critic2, value_net, replay_buffer:R2D2_TrajectoryStore, \
+    def learner_cmd_processor(actor, critic1, critic2, replay_buffer:R2D2_TrajectoryStore, \
                              cmd_pipe, learner_weights_pipe, replay_data_pipe, priorities_pipe, net_sync_obj, data_sync_obj):
         global networks_initialized
+        global alpha_log
         connection_alive = True
         while connection_alive:
             try:
@@ -69,7 +71,6 @@ if __name__ == '__main__':
                         actor.set_weights(weights[0])
                         critic1.set_weights(weights[1])
                         critic2.set_weights(weights[2])
-                        value_net.set_weights(weights[3])
                         networks_initialized = True
                     orchestrator_log(f'Target networks are updated')
                     continue
@@ -123,12 +124,12 @@ if __name__ == '__main__':
     stack_size = 4
     state_space_shape = (stack_size, env.observation_space.shape[0])
     outputs_count = env.action_space.shape[0]
-    actor_recurrent_layer_size = 512
+    actor_recurrent_layer_size = 256
 
     trajectory_length = 80
     burn_in_length = 20
 
-    exp_buffer = R2D2_TrajectoryStore(buffer_size=250000, alpha=0.7, beta=0.5, beta_increase_rate=1)
+    exp_buffer = R2D2_TrajectoryStore(buffer_size=1000000, alpha=0.7, beta=0.5, beta_increase_rate=1)
 
     weights_sync = Lock()
     data_sync = Lock()
@@ -147,7 +148,6 @@ if __name__ == '__main__':
     critic1_net = critic_network(state_space_shape, outputs_count, actor_recurrent_layer_size)
     critic2_net = critic_network(state_space_shape, outputs_count, actor_recurrent_layer_size)
     policy_net = policy_network(state_space_shape, outputs_count, actor_recurrent_layer_size)
-    value_net = value_network(state_space_shape)
 
     cancelation_token = Value('i', 0)
     training_active_flag = Value('i', 0)
@@ -159,12 +159,12 @@ if __name__ == '__main__':
     # 3. Fill up replay buffer
     # 4. Start learning
 
-    actor_cmd_processor_thread = Thread(target=actor_cmd_processor, args=(policy_net, critic1_net, critic2_net, value_net, exp_buffer, \
+    actor_cmd_processor_thread = Thread(target=actor_cmd_processor, args=(policy_net, critic1_net, critic2_net, exp_buffer, \
                                                                     actor_cmd_read_pipe, weights_distribution_pipes, replay_data_distribution_pipes, \
                                                                     weights_sync, data_sync))
     actor_cmd_processor_thread.start()
 
-    learner_cmd_processor_thread = Thread(target=learner_cmd_processor, args=(policy_net, critic1_net, critic2_net, value_net, exp_buffer, \
+    learner_cmd_processor_thread = Thread(target=learner_cmd_processor, args=(policy_net, critic1_net, critic2_net, exp_buffer, \
                                                                     learner_cmd_read_pipe, learner_weights_read_pipe, learner_replay_data_write_pipe, learner_priorities_read_pipe, \
                                                                     weights_sync, data_sync))
     learner_cmd_processor_thread.start()
