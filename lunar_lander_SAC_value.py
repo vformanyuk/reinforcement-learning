@@ -15,17 +15,18 @@ X_shape = (env.observation_space.shape[0])
 outputs_count = env.action_space.shape[0]
 
 batch_size = 100
-num_episodes = 5000
-actor_learning_rate = 3e-4
-critic_learning_rate = 3e-4
+num_episodes = 1000
+actor_learning_rate = 3e-3
+critic_learning_rate = 3e-3
 value_learning_rate = 3e-4
 gamma = 0.99
-tau = 0.005
+tau = 0.05
 gradient_step = 1
-log_std_min=-20
-log_std_max=2
+log_std_min=-10
+log_std_max=1
 action_bounds_epsilon=1e-6
 target_entropy = -np.prod(env.action_space.shape)
+alpha_log = tf.Variable(0.5, dtype = tf.float32, trainable=True)
 
 initializer_bounds = 3e-3
 
@@ -38,6 +39,7 @@ global_step = 0
 actor_optimizer = tf.keras.optimizers.Adam(actor_learning_rate)
 critic_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
 value_optimizer = tf.keras.optimizers.Adam(value_learning_rate)
+alpha_optimizer = tf.keras.optimizers.Adam(value_learning_rate)
 mse_loss = tf.keras.losses.MeanSquaredError()
 
 gaus_distr = tfp.distributions.Normal(0,1)
@@ -45,7 +47,7 @@ gaus_distr = tfp.distributions.Normal(0,1)
 tf.random.set_seed(RND_SEED)
 np.random.random(RND_SEED)
 
-exp_buffer_capacity = 1000000
+exp_buffer_capacity = 500000
 
 exp_buffer = SARST_RandomAccess_MemoryBuffer(exp_buffer_capacity, env.observation_space.shape, env.action_space.shape)
 
@@ -106,7 +108,7 @@ def get_log_probs(mu, sigma, actions, noise):
 
 @tf.function
 def train_critics(states, actions, next_states, rewards, dones):
-    target_q = rewards + gamma * (1 - dones) * target_value_net(next_states, training=False)
+    target_q = rewards + gamma * (1 - dones) * tf.squeeze(target_value_net(next_states, training=False), axis = 1)
 
     with tf.GradientTape() as tape:
         current_q = critic_1([states, actions], training=True)
@@ -123,6 +125,7 @@ def train_critics(states, actions, next_states, rewards, dones):
 
 @tf.function
 def train_actor_and_value(states):
+    alpha = tf.math.exp(alpha_log)
     noise = gaus_distr.sample(sample_shape=(batch_size, outputs_count))
     with tf.GradientTape() as tape:
         mu, log_sigma = actor(states, training=True)
@@ -135,12 +138,17 @@ def train_actor_and_value(states):
         target_q = tf.math.minimum(critic_1([states, target_actions], training=False), \
                                    critic_2([states, target_actions], training=False))
         target_q = tf.squeeze(target_q, axis=1)
-        target_v = tf.stop_gradient(target_q - log_probs)
-        actor_loss = tf.reduce_mean(log_probs - target_q)
+        actor_loss = tf.reduce_mean(alpha * log_probs - target_q)
+
+        with tf.GradientTape() as alpha_tape:
+            alpha_loss = -tf.reduce_mean(alpha_log * tf.stop_gradient(log_probs + target_entropy))
+        alpha_gradients = alpha_tape.gradient(alpha_loss, alpha_log)
+        alpha_optimizer.apply_gradients([(alpha_gradients, alpha_log)])
 
     gradients = tape.gradient(actor_loss, actor.trainable_variables)
     actor_optimizer.apply_gradients(zip(gradients, actor.trainable_variables))
 
+    target_v = target_q - tf.exp(alpha_log) * log_probs
     with tf.GradientTape() as value_tape:
         current_v = value_net(states, training=True)
         value_loss = mse_loss(current_v, target_v)
