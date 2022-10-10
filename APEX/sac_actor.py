@@ -4,7 +4,7 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 import multiprocessing as mp
 
-from APEX.neural_networks import sac_policy_network, sac_critic_network
+from APEX.neural_networks import sac_policy_network, sac_value_network
 from APEX.APEX_Local_MemoryBuffer import APEX_NStepReturn_MemoryBuffer
 
 class Actor(object):
@@ -12,8 +12,9 @@ class Actor(object):
                  cmd_pipe:mp.Pipe, weights_pipe:mp.Pipe, replay_pipe:mp.Pipe, cancelation_token:mp.Value, training_active_flag:mp.Value,
                  *args, **kwargs):
         # prevent TensorFlow of allocating whole GPU memory. Must be called in every module
-        gpus = tf.config.experimental.list_physical_devices('GPU')
-        tf.config.experimental.set_memory_growth(gpus[0], True)
+        # gpus = tf.config.experimental.list_physical_devices('GPU')
+        # tf.config.experimental.set_memory_growth(gpus[0], True)
+        tf.config.set_visible_devices([], 'GPU')
 
         self.debug_mode = False
         self.id = id
@@ -31,7 +32,6 @@ class Actor(object):
         self.action_bounds_epsilon = 1e-6
         self.log_std_min = -20
         self.log_std_max = 2
-        self.alpha_log = 0.5
 
     def log(self, msg):
         if self.debug_mode:
@@ -42,9 +42,7 @@ class Actor(object):
             self.cmd_pipe.send([0, self.id])
             weights = self.weights_pipe.recv()
             self.actor.set_weights(weights[0])
-            self.critic1.set_weights(weights[1])
-            self.critic2.set_weights(weights[2])
-            self.alpha_log = float(weights[3])
+            self.value_net.set_weights(weights[1])
             self.log(f'Target actor and target critic weights refreshed.')
         except EOFError:
             print("[get_target_weights] Connection closed.")
@@ -65,74 +63,26 @@ class Actor(object):
         except OSError:
             print("[send_replay_data] Connection closed.")
 
-    def __soft_update_models(self):
-        target_critic1_weights = self.target_critic1.get_weights()
-        critic1_weights = self.critic1.get_weights()
-        updated_target_critic_weights = []
-        for c1w,tc1w in zip(critic1_weights,target_critic1_weights):
-            updated_target_critic_weights.append(self.tau * c1w + (1.0 - self.tau) * tc1w)
-        self.target_critic1.set_weights(updated_target_critic_weights)
-
-        target_critic2_weights = self.target_critic2.get_weights()
-        critic2_weights = self.critic2.get_weights()
-        updated_target_critic_weights = []
-        for c2w,tc2w in zip(critic2_weights,target_critic2_weights):
-            updated_target_critic_weights.append(self.tau * c2w + (1.0 - self.tau) * tc2w)
-        self.target_critic2.set_weights(updated_target_critic_weights)
-
     def __prepare_and_send_replay_data(self, exp_buffer:APEX_NStepReturn_MemoryBuffer, batch_length:int):
         states, actions, next_states, rewards, gamma_powers, dones, _ = exp_buffer.get_tail_batch(batch_length)
-        td_errors = self.get_td_errors(states, actions, next_states, rewards, gamma_powers, dones)
+        td_errors = self.get_td_errors(states, next_states, rewards, gamma_powers, dones)
         self.send_replay_data(states, actions, next_states, rewards, gamma_powers, dones, td_errors)
 
     @tf.function
-    def get_actions(self, mu, log_sigma, noise=None):
-        if noise is None:
-            noise = self.gaus_distr.sample()
+    def get_actions(self, mu, log_sigma, noise):
         return tf.math.tanh(mu + tf.math.exp(log_sigma) * noise)
 
     @tf.function
-    def get_log_probs(self, mu, sigma, actions):
-        action_distributions = tfp.distributions.MultivariateNormalDiag(loc=mu, scale_diag=sigma)
-        z = self.gaus_distr.sample()
-        # appendix C of the SAC paper discribe applyed boundings which is log(1-tanh(u)^2)
-        log_probs = action_distributions.log_prob(mu + sigma*z) - \
-                    tf.reduce_mean(tf.math.log(1 - tf.math.pow(actions, 2) + self.action_bounds_epsilon), axis=1)
-        return log_probs
-
-    @tf.function
-    def get_td_errors(self, states, actions, next_states, rewards, gamma_powers, dones):
-        mu, log_sigma = self.actor(next_states, training=False)
-        mu = tf.squeeze(mu)
-        log_sigma = tf.clip_by_value(tf.squeeze(log_sigma), self.log_std_min, self.log_std_max)
-
-        target_actions = self.get_actions(mu, log_sigma)
-
-        min_target_q = tf.math.minimum(self.target_critic1([next_states, target_actions], training=False), \
-                                       self.target_critic2([next_states, target_actions], training=False))
-
-        sigma = tf.math.exp(log_sigma)
-        log_probs = self.get_log_probs(mu, sigma, target_actions)
-        next_values = tf.squeeze(min_target_q, axis=1) - tf.math.exp(self.alpha_log) * log_probs # min(Q1^,Q2^) - alpha * logPi
-
-        target_q = rewards + tf.math.pow(self.gamma, gamma_powers + 1) * (1 - dones) * next_values
-
-        min_q = tf.math.minimum(self.critic1([states, actions], training=False), \
-                                self.critic2([states, actions], training=False))
-
-        return tf.math.abs(target_q - tf.squeeze(min_q, axis=1))
+    def get_td_errors(self, states, next_states, rewards, gamma_powers, dones):
+        next_values = tf.squeeze(self.value_net(next_states, training=False), axis = 1)
+        target_values = rewards + tf.math.pow(self.gamma, gamma_powers + 1) * (1 - dones) * next_values
+        current_values = tf.squeeze(self.value_net(states, training=False), axis = 1)
+        return tf.math.abs(target_values - current_values)
 
     def run(self):
         env = gym.make('LunarLanderContinuous-v2')
-        self.actor = sac_policy_network((env.observation_space.shape[0]), env.action_space.shape[0])
-        
-        self.critic1 = sac_critic_network((env.observation_space.shape[0]), env.action_space.shape[0])
-        self.target_critic1 = sac_critic_network((env.observation_space.shape[0]), env.action_space.shape[0])
-        self.target_critic1.set_weights(self.critic1.get_weights())
-
-        self.critic2 = sac_critic_network((env.observation_space.shape[0]), env.action_space.shape[0])
-        self.target_critic2 = sac_critic_network((env.observation_space.shape[0]), env.action_space.shape[0])
-        self.target_critic2.set_weights(self.critic2.get_weights())
+        self.actor = sac_policy_network((env.observation_space.shape[0]), env.action_space.shape[0])        
+        self.value_net = sac_value_network((env.observation_space.shape[0]))
 
         self.get_target_weights()
 
@@ -156,8 +106,8 @@ class Actor(object):
 
             while not done and self.cancelation_token.value == 0:
                 mean, log_std_dev = self.actor(np.expand_dims(observation, axis = 0), training=False)
-                throttle_action = self.get_actions(mean[0][0], log_std_dev[0][0])
-                eng_ctrl_action = self.get_actions(mean[0][1], log_std_dev[0][1])
+                throttle_action = self.get_actions(mean[0][0], log_std_dev[0][0], self.gaus_distr.sample())
+                eng_ctrl_action = self.get_actions(mean[0][1], log_std_dev[0][1], self.gaus_distr.sample())
 
                 next_observation, reward, done, _ = env.step([throttle_action, eng_ctrl_action])
                 exp_buffer.store(observation, [throttle_action, eng_ctrl_action], next_observation, reward, float(done))
@@ -167,9 +117,6 @@ class Actor(object):
 
                 if global_step % self.exchange_steps == 0 and self.training_active.value > 0: # update target networks every 'exchange_steps'
                     self.get_target_weights()
-
-                if global_step % 10 == 0:
-                    self.__soft_update_models()
                     
                 observation = next_observation
                 global_step+=1
