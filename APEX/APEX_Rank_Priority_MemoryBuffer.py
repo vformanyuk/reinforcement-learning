@@ -127,7 +127,7 @@ class APEX_Rank_Priority_MemoryBuffer(object):
         # alpha = alpha_coef * (storage_len / self.buffer_size)
        
         alpha_sigma_coef1 = 5.0
-        alpha_sigma_coef2 = (self.buffer_size / 2.0) / (2*alpha_sigma_coef1)
+        alpha_sigma_coef2 = (self.buffer_size / 2.0) / alpha_sigma_coef1
         alpha = 1 - tf.math.sigmoid(alpha_sigma_coef1 - storage_len / alpha_sigma_coef2).numpy()
 
         alpha = min(alpha, self.alpha_target)
