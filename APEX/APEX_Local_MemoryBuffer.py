@@ -32,14 +32,10 @@ class APEX_NStepReturn_MemoryBuffer(object):
         self.dones_memory[write_idx] = is_terminal
         #propogate back current reward
         n_return_idx = 0
-        update_idx = (self.buffer_size + (write_idx - n_return_idx)) % self.buffer_size
         while self.memory_idx - n_return_idx >= 0 and n_return_idx < self.N: # [0 .. N-1]
-            if self.dones_memory[update_idx] > 0 and update_idx != write_idx: # don't propagate reward to previous episodes, but accept terminal state of current episode
-                break
-            self.rewards_memory[update_idx] += reward * self.gammas[n_return_idx]
-            self.gamma_power_memory[update_idx] = n_return_idx
+            self.rewards_memory[self.memory_idx - n_return_idx] += reward * self.gammas[n_return_idx]
+            self.gamma_power_memory[self.memory_idx - n_return_idx] = n_return_idx
             n_return_idx += 1
-            update_idx = (self.buffer_size + (write_idx - n_return_idx)) % self.buffer_size
         self.memory_idx += 1
 
     def update_td_errors(self, idxs, td_errors):
