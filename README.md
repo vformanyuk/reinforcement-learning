@@ -42,3 +42,4 @@ It is representative and doesn't skip frames like some other envs.
   * Modified LunarLander environemnt [LunarLander multitask](https://github.com/vformanyuk/reinforcement-learning/blob/master/env/lunar_lander.py). This implementation has two tasks: original landing task and new - lift off. Last one require lander to fly off from landing pad
   * [Active Dendrits and k-Winner-Takes-All layers](https://github.com/vformanyuk/reinforcement-learning/blob/master/rl_utils/ad_layer.py)
   * The training [script](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_ActiveDendritsNetwork.py)
+* [Quantile Regression QR-DQN](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_QR_DQN.py)
