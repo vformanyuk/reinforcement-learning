@@ -43,3 +43,4 @@ It is representative and doesn't skip frames like some other envs.
   * [Active Dendrits and k-Winner-Takes-All layers](https://github.com/vformanyuk/reinforcement-learning/blob/master/rl_utils/ad_layer.py)
   * The training [script](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_ActiveDendritsNetwork.py)
 * [Quantile Regression QR-DQN](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_QR_DQN.py)
+* [Implicit Quantile Networks IQN](https://github.com/vformanyuk/reinforcement-learning/blob/master/lunar_lander_IQN.py)
