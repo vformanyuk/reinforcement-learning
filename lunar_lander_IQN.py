@@ -41,7 +41,7 @@ np.random.random(RND_SEED)
 
 optimizer = tf.keras.optimizers.Adam(learning_rate)
 
-def q_network_no_embedding(state_space_shape, action_space_shape, cos_layer_size, quantiles_count):
+def q_network(state_space_shape, action_space_shape, cos_layer_size, quantiles_count):
     input = keras.layers.Input(shape=state_space_shape, batch_size=batch_size)
     tau_input = keras.layers.Input(shape=(quantiles_count,), batch_size=batch_size)
 
@@ -53,22 +53,6 @@ def q_network_no_embedding(state_space_shape, action_space_shape, cos_layer_size
     cos_x = tf.keras.layers.ReLU()(cos_x)
     
     x = tf.keras.layers.Multiply()([x, cos_x])
-    output = keras.layers.Dense(action_space_shape * quantiles_count, activation='linear')(x)
-
-    model = keras.Model(inputs=[input, tau_input], outputs=output)
-    return model
-
-def q_network_embedding(state_space_shape, action_space_shape, cos_layer_size, quantiles_count):
-    input = keras.layers.Input(shape=state_space_shape, batch_size=batch_size)
-    tau_input = keras.layers.Input(shape=(quantiles_count,), batch_size=batch_size)
-
-    x = keras.layers.Dense(256, activation='relu')(input)
-    
-    cos_x = CosLayer(cos_layer_size)(tau_input)
-    cos_x_embeding = keras.layers.Dense(256, activation='relu')(cos_x)
-    
-    x = tf.keras.layers.Multiply()([x, cos_x_embeding])
-    x = keras.layers.Dense(128, activation='relu')(x)
     output = keras.layers.Dense(action_space_shape * quantiles_count, activation='linear')(x)
 
     model = keras.Model(inputs=[input, tau_input], outputs=output)
@@ -122,8 +106,8 @@ def hubber_loss(abs_td_error):
 
 exp_buffer = SARST_RandomAccess_MemoryBuffer(500_000, (state_space_shape,), None, action_type=np.int32)
 
-mainQ = q_network_embedding(state_space_shape, action_space_shape, cos_layer_size, quantile_count_K)
-targetQ = q_network_embedding(state_space_shape, action_space_shape, cos_layer_size, quantile_count_K)
+mainQ = q_network(state_space_shape, action_space_shape, cos_layer_size, quantile_count_K)
+targetQ = q_network(state_space_shape, action_space_shape, cos_layer_size, quantile_count_K)
 
 rewards_history = []
 
