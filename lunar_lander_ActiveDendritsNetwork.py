@@ -17,7 +17,7 @@ env = LunarLander(continuous=True) #gym.make('LunarLanderContinuous-v2')
 X_shape = (env.observation_space.shape[0])
 outputs_count = env.action_space.shape[0]
 context_vector_length = 2
-dendrits_count = 2
+dendrits_count = 8
 
 batch_size = 100
 num_episodes = 5000
@@ -68,8 +68,8 @@ def policy_network(debug=False):
     context_intput = keras.layers.Input(shape=(context_vector_length))
 
     x = keras.layers.Dense(512, activation='linear', name="actr_dense_1")(input)
-    x = kWTA_Layer(top_activations_count=128, name="actr_kwta_1")(x) # takes top 25% of neurons, non-linearity layer
-    x = ADLayer(256, dendrits_count, context_vector_length, use_abs_max = False, name="actr_ad_1")([x, context_intput])
+    x = keras.layers.LeakyReLU()(x)
+    x = ADLayer(256, dendrits_count, context_vector_length, use_abs_max = True, name="actr_ad_1")([x, context_intput])
     x = kWTA_Layer(top_activations_count=64, name="actr_kwta_2")(x) # takes top 25% of neurons, non-linearity layer
     mean_output = keras.layers.Dense(outputs_count, activation='linear',
                                 kernel_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED),
@@ -89,8 +89,8 @@ def critic_network(debug=False):
 
     x = keras.layers.Concatenate()([input, actions_input])
     x = keras.layers.Dense(512, activation='linear', name="crtc_dense_1")(x)
-    x = kWTA_Layer(top_activations_count=128, name="crtc_kwta_1")(x) # takes top 25% of neurons, non-linearity layer
-    x = ADLayer(512, dendrits_count, context_vector_length, use_abs_max = False, name="crtc_ad_1")([x, context_intput])
+    x = keras.layers.LeakyReLU()(x)
+    x = ADLayer(512, dendrits_count, context_vector_length, use_abs_max = True, name="crtc_ad_1")([x, context_intput])
     x = kWTA_Layer(top_activations_count=128, name="crtc_kwta_2")(x) # takes top 25% of neurons, non-linearity layer
     q_layer = keras.layers.Dense(1, activation='linear',
                                 kernel_initializer = keras.initializers.RandomUniform(minval=-initializer_bounds, maxval=initializer_bounds, seed=RND_SEED),
@@ -220,7 +220,7 @@ training_complete = False
 
 for i in range(num_episodes):
     done = False
-    lift_off = np.random.uniform() > 0.5
+    lift_off = np.random.uniform() > 0.7
     observation = env.reset(lift_off=lift_off)
 
     context_vector = land_task if not lift_off else lift_off_task
@@ -257,11 +257,6 @@ for i in range(num_episodes):
         epoch_steps+=1
         episodic_reward += reward
 
-    # if i % checkpoint_step == 0 and i > 0:
-    #     actor.save(actor_checkpoint_file_name)
-    #     critic_1.save(critic_1_checkpoint_file_name)
-    #     critic_2.save(critic_2_checkpoint_file_name)
-
     if lift_off:
         lift_off_rewards_history.append(episodic_reward)
     else:
@@ -269,7 +264,7 @@ for i in range(num_episodes):
     lift_off_last_mean = np.mean(lift_off_rewards_history[-100:])
     landing_last_mean = np.mean(landing_rewards_history[-100:])
     print(f'[epoch {i} ({epoch_steps})] Actor_Loss: {np.mean(actor_loss_history):.4f} Critic_Loss: {np.mean(critic_loss_history):.4f} Total reward: {episodic_reward} Mean100_landing={landing_last_mean:.4f} Mean100_lift={lift_off_last_mean:.4f}')
-    if lift_off_last_mean > 200 and lift_off_last_mean > 200:
+    if lift_off_last_mean > 200 and landing_last_mean > 200:
         training_complete = True
         break
 if training_complete:
