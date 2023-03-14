@@ -34,7 +34,7 @@ log_std_max=2
 action_bounds_epsilon=1e-6
 target_entropy = -np.prod(env.action_space.shape)
 
-uncertanicyService = UncertaintyService(state_space_shape, int(1.5 * state_space_shape), curiosity_mode=True, use_layer_norm=False)
+uncertanicyService = UncertaintyService(state_space_shape, int(1.5 * state_space_shape), curiosity_mode=True)
 
 extrinsic_reward_coef = tf.constant(1, dtype=tf.float32) #1
 intrinsic_reward_coef = tf.constant(1, dtype=tf.float32) #10
@@ -239,9 +239,7 @@ for i in range(num_episodes):
         if global_step > 4 * batch_size:
             states, actions, next_states, rewards, dones = exp_buffer(batch_size)
 
-            # intrinsic_rewards = uncertanicyService.getUncertainty(states)
-            intrinsic_rewards = uncertanicyService.getUncertainty_NoRunningStatistics(states)
-            # intrinsic_rewards = uncertanicyService.getUncertainty_LayerNorm(states)
+            intrinsic_rewards = uncertanicyService.getUncertainty(states)
             combined_rewards = extrinsic_reward_coef * rewards + intrinsic_reward_coef * intrinsic_rewards
 
             intrinsic_total += tf.math.reduce_sum(intrinsic_rewards)
