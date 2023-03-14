@@ -4,14 +4,16 @@ import tensorflow as tf
 import tensorflow_probability as tfp
 from tensorflow import keras
 import os
+
 from rl_utils.SARST_RandomAccess_MemoryBuffer import SARST_RandomAccess_MemoryBuffer
+from rl_utils.UncertaintyService import UncertaintyService
 
 # enable XLA
 #os.environ['TF_XLA_FLAGS'] = '--tf_xla_enable_xla_devices'
 #os.environ['XLA_FLAGS'] = '--xla_gpu_cuda_data_dir="C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v11.3"'
 
-# prevent TensorFlow of allocating whole GPU memory
-gpus = tf.config.experimental.list_physical_devices('GPU')
+gpus = tf.config.list_physical_devices('GPU')
+tf.config.set_visible_devices(gpus[0], 'GPU')
 tf.config.experimental.set_memory_growth(gpus[0], True)
 
 env = gym.make('LunarLanderContinuous-v2')
@@ -32,11 +34,10 @@ log_std_max=2
 action_bounds_epsilon=1e-6
 target_entropy = -np.prod(env.action_space.shape)
 
-states_mv_mask = tf.zeros((batch_size - 1, state_space_shape), dtype=tf.float32)
-intrinsic_rewards_mv_mask = tf.zeros((batch_size - 1,), dtype=tf.float32)
+uncertanicyService = UncertaintyService(state_space_shape, int(1.5 * state_space_shape), curiosity_mode=True)
 
 extrinsic_reward_coef = tf.constant(1, dtype=tf.float32) #1
-intrinsic_reward_coef = tf.constant(10, dtype=tf.float32) #10
+intrinsic_reward_coef = tf.constant(1, dtype=tf.float32) #10
 actor_loss_coef = tf.constant(1, dtype=tf.float32) #1
 
 initializer_bounds = 3e-3
@@ -53,7 +54,6 @@ critic_2_checkpoint_file_name = 'll_sac_critic2_checkpoint.h5'
 actor_optimizer = tf.keras.optimizers.Adam(actor_learning_rate)
 critic_optimizer = tf.keras.optimizers.Adam(critic_learning_rate)
 alpha_optimizer = tf.keras.optimizers.Adam(alpha_learning_rate)
-predictor_optimizer = tf.keras.optimizers.Adam(predictor_learning_rate)
 mse_loss = tf.keras.losses.MeanSquaredError()
 
 gaus_distr = tfp.distributions.Normal(0,1)
@@ -94,22 +94,6 @@ def critic_network(state_space_shape, action_space_shape):
 
     model = keras.Model(inputs=[input, actions_input], outputs=q_layer)
     return model
-
-def predictor_network(state_space_shape):
-    input = keras.layers.Input(shape=(state_space_shape))
-
-    x = keras.layers.Dense(256, kernel_initializer = keras.initializers.Orthogonal(np.sqrt(2)),
-                           bias_initializer = keras.initializers.Zeros())(input)
-    x = keras.layers.LeakyReLU()(x)
-    x = keras.layers.Dense(128, kernel_initializer = keras.initializers.Orthogonal(np.sqrt(2)),
-                           bias_initializer = keras.initializers.Zeros())(x)
-    x = keras.layers.LeakyReLU()(x)
-    embedding = keras.layers.Dense(1, activation='linear')(x)
-    #embedding = keras.layers.Dense(state_space_shape, activation='linear')(x)
-
-    model = keras.Model(inputs=input, outputs=embedding)
-    return model
-
 '''
 SAC uses action reparametrization to avoid expectation over action.
 So action is represented by squashed (tanh in this case) Normal distribution
@@ -187,39 +171,6 @@ def train_actor(states):
     actor_optimizer.apply_gradients(zip(gradients, actor.trainable_variables))
     return actor_loss
 
-@tf.function
-def get_combined_rewards(states, rewards, extrinsic_coef, intrinsic_coef, states_avg, states_mv, intrinsic_avg, intrinsic_mv, batch_index):
-    #states_cma += (observation - old_cma) / (global_step + 1)
-    states_mean = states_avg + (tf.reduce_mean(states, axis=0) - states_avg) / batch_index
-    
-    #states_mv += (observation - states_cma) * (observation - old_cma)
-    states_mv_masked = tf.concat([tf.expand_dims(states_mv, axis=0), states_mv_mask], axis=0)
-    states_var = tf.math.cumsum(states_mv_masked + (states - states_mean) * (states - states_avg), axis=0)[batch_size - 1]
-
-    states_std_dev = tf.math.sqrt(states_var / (batch_size * batch_index))
-    #states_std_dev = tf.math.reduce_std(states, axis=0)
-
-    normalized_states = tf.clip_by_value(tf.math.divide_no_nan((states - states_mean), states_std_dev), -5, 5)
-    embedding = rnd_target(normalized_states, training=False)
-    with tf.GradientTape() as tape:
-        pred = predictor(normalized_states, training=True)
-        intrinsic_rewards = tf.squeeze(tf.math.square(pred - embedding), axis=1)
-        loss = tf.reduce_mean(intrinsic_rewards)
-    gradients = tape.gradient(loss, predictor.trainable_variables)
-    predictor_optimizer.apply_gradients(zip(gradients, predictor.trainable_variables))
-
-    #intrinsic_reward_cma += (intrinsic_reward - old_ir_cma) / intrinsic_reward_counter
-    intrinsic_mean = intrinsic_avg + (tf.reduce_mean(intrinsic_rewards, axis=0) - intrinsic_avg) / batch_index
-    intrinsic_mv_masked = tf.concat([tf.expand_dims(intrinsic_mv, axis=0), intrinsic_rewards_mv_mask], axis=0)
-    #intrinsic_reward_mv += (intrinsic_reward - intrinsic_reward_cma) * (intrinsic_reward - old_ir_cma)
-    intrinsic_var = tf.math.cumsum(intrinsic_mv_masked + (intrinsic_rewards - intrinsic_mean) * (intrinsic_rewards - intrinsic_avg), axis=0)[batch_size - 1]
-    #ir_std_dev = np.sqrt(intrinsic_reward_mv / intrinsic_reward_counter)
-    intrinsic_std_dev = tf.math.sqrt(intrinsic_var / (batch_size * batch_index))
-
-    combined_rewards = tf.math.multiply(rewards, extrinsic_coef) + tf.math.multiply(tf.math.divide(intrinsic_rewards, intrinsic_std_dev), intrinsic_coef)
-
-    return combined_rewards, intrinsic_rewards, states_mean, states_var, intrinsic_mean, intrinsic_var
-
 def soft_update_models():
     target_critic_1_weights = target_critic_1.get_weights()
     critic_1_weights = critic_1.get_weights()
@@ -260,17 +211,8 @@ else:
 target_critic_2 = critic_network(state_space_shape, action_space_shape)
 target_critic_2.set_weights(critic_2.get_weights())
 
-rnd_target = predictor_network(state_space_shape)
-predictor = predictor_network(state_space_shape)
-
 rewards_history = []
 global_step = 0
-
-states_avg = tf.zeros((state_space_shape,), dtype=tf.float32)
-states_var = tf.zeros((state_space_shape,), dtype=tf.float32)
-intrinsicR_avg = tf.convert_to_tensor(0., dtype=tf.float32)
-intrinsicR_var = tf.convert_to_tensor(0., dtype=tf.float32)
-batch_index = 0
 
 for i in range(num_episodes):
     done = False
@@ -295,17 +237,13 @@ for i in range(num_episodes):
         exp_buffer.store(observation, [throttle_action, eng_ctrl_action], next_observation, reward, float(done))
 
         if global_step > 4 * batch_size:
-            batch_index += 1
             states, actions, next_states, rewards, dones = exp_buffer(batch_size)
 
-            combined_rewards, intrinsic_rewards, states_avg, states_var, intrinsicR_avg, intrinsicR_var = get_combined_rewards(states, rewards, \
-                                                                                            extrinsic_reward_coef, intrinsic_reward_coef, \
-                                                                                            states_avg, states_var, 
-                                                                                            intrinsicR_avg, intrinsicR_var,
-                                                                                            tf.convert_to_tensor(batch_index, dtype=tf.float32))
+            intrinsic_rewards = uncertanicyService.getUncertainty(states)
+            combined_rewards = extrinsic_reward_coef * rewards + intrinsic_reward_coef * intrinsic_rewards
 
             intrinsic_total += tf.math.reduce_sum(intrinsic_rewards)
-            intrinsic_count += batch_size #len(intrinsic_rewards)
+            intrinsic_count += batch_size
 
             for _ in range(gradient_step):
                 critic1_loss, critic2_loss = train_critics(states, actions, next_states, combined_rewards, dones)
@@ -332,6 +270,6 @@ for i in range(num_episodes):
     if last_mean > 200:
         break
 if last_mean > 200:
-    actor.save('lunar_lander_sac.h5')
+    actor.save('lunar_lander_sac_curiosity.h5')
 env.close()
 input("training complete...")
