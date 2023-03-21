@@ -3,17 +3,10 @@ import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from rl_utils.SARST_NStepReturn_RandomAccess_MemoryBuffer import SARST_NStepReturn_RandomAccess_MemoryBuffer
-import os
 
-'''
-Try also:
-Lambda returns. G(t) = R(t+1) + gamma*(1-lambda(t+1))*V(S[t+1]) + gamma * lambda(t+1)*G(t+1)
-'''
-
-# prevent TensorFlow of allocating whole GPU memory
-gpus = tf.config.experimental.list_physical_devices('GPU')
-if len(gpus) > 0:
-    tf.config.experimental.set_memory_growth(gpus[0], True)
+gpus = tf.config.list_physical_devices('GPU')
+tf.config.set_visible_devices(gpus[0], 'GPU')
+tf.config.experimental.set_memory_growth(gpus[0], True)
 
 env = gym.make('LunarLander-v2')
 
@@ -28,12 +21,7 @@ batch_size = 16
 log_std_min=-20
 log_std_max=2
 
-checkpoint_step = 500
-
 outputs_count = env.action_space.n
-
-actor_checkpoint_file_name = 'll_a2c_nrH_checkpoint.h5'
-critic_checkpoint_file_name = 'll_a2c_nrH_checkpoint.h5'
 
 RND_SEED = 0x12345
 tf.random.set_seed(RND_SEED)
@@ -48,8 +36,10 @@ exp_buffer = SARST_NStepReturn_RandomAccess_MemoryBuffer(1001, N_return, gamma, 
 
 def policy_network():
     input = keras.layers.Input(shape=(X_shape))
-    x = keras.layers.Dense(256, activation='relu')(input)
-    x = keras.layers.Dense(128, activation='relu')(x)
+    x = keras.layers.Dense(256, activation='relu', kernel_initializer = keras.initializers.HeNormal(seed = RND_SEED),
+                                                   bias_initializer = keras.initializers.Constant(0.0))(input)
+    x = keras.layers.Dense(256, activation='relu', kernel_initializer = keras.initializers.HeNormal(seed = RND_SEED),
+                                                   bias_initializer = keras.initializers.Constant(0.0003))(x)
     actions_layer = keras.layers.Dense(outputs_count, activation='linear')(x)
 
     model = keras.Model(inputs=input, outputs=actions_layer)
@@ -57,26 +47,17 @@ def policy_network():
 
 def value_network():
     input = keras.layers.Input(shape=(X_shape))
-    x = keras.layers.Dense(256, activation='relu')(input)
-    x = keras.layers.Dense(128, activation='relu', kernel_regularizer=keras.regularizers.l2(0.001))(x)
+    x = keras.layers.Dense(256, activation='relu', kernel_initializer = keras.initializers.HeNormal(seed = RND_SEED),
+                                                   bias_initializer = keras.initializers.Constant(0.0))(input)
+    x = keras.layers.Dense(256, activation='relu', kernel_initializer = keras.initializers.HeNormal(seed = RND_SEED),
+                                                   bias_initializer = keras.initializers.Constant(0.0003))(x)
     v_layer = keras.layers.Dense(1, activation='linear')(x)
 
     model = keras.Model(inputs=input, outputs=v_layer)
     return model
 
-if os.path.isfile(actor_checkpoint_file_name):
-    actor = keras.models.load_model(actor_checkpoint_file_name)
-    print("Actor model restored from checkpoint.")
-else:
-    actor = policy_network()
-    print("New Actor model created.")
-
-if os.path.isfile(critic_checkpoint_file_name):
-    critic = keras.models.load_model(critic_checkpoint_file_name)
-    print("Critic model restored from checkpoint.")
-else:
-    critic = value_network()
-    print("New Critic model created.")
+actor = policy_network()
+critic = value_network()
 
 @tf.function
 def train_actor(states, actions, advantages):
@@ -90,7 +71,7 @@ def train_actor(states, actions, advantages):
         entropy = -tf.reduce_sum(actions_log_distribution * actions_distribution)
 
         #loss = - actions_log_distribution[action] * advantages + entropy_beta * entropy
-        loss = - tf.reduce_mean(tf.reduce_sum(tf.math.multiply(actions_log_distribution, one_hot_actions_mask), axis=1) * advantages) + entropy_beta * entropy
+        loss = - tf.reduce_mean(tf.reduce_sum(actions_log_distribution * one_hot_actions_mask, axis=1) * advantages) + entropy_beta * entropy
     gradients = tape.gradient(loss, actor.trainable_variables)
     actor_optimizer.apply_gradients(zip(gradients, actor.trainable_variables))
     return loss
@@ -127,7 +108,10 @@ for i in range(num_episodes):
         exp_buffer.store(observation, chosen_action, next_observation, reward, float(done))
 
         if (epoch_steps % (batch_size + N_return) == 0 and epoch_steps > 0) or done:
-            states, actions, next_states, rewards, gammas, dones = exp_buffer.get_tail_batch(batch_size)
+            if done:
+                states, actions, next_states, rewards, gammas, dones = exp_buffer.get_tail_batch(batch_size)
+            else:
+                states, actions, next_states, rewards, gammas, dones = exp_buffer(batch_size)
             critic_loss, adv = train_critic(states, next_states, rewards, gammas, dones)
             critic_loss_history.append(critic_loss)
             actor_loss = train_actor(states, actions, adv)
@@ -136,13 +120,7 @@ for i in range(num_episodes):
         epoch_steps+=1
         observation = next_observation
 
-    if i % checkpoint_step == 0 and i > 0:
-        actor.save(actor_checkpoint_file_name)
-        critic.save(critic_checkpoint_file_name)
-
     rewards_history.append(episodic_reward)
-
-    exp_buffer.reset()
 
     last_mean = np.mean(rewards_history[-100:])
     print(f'[epoch {i} ({epoch_steps})] Actor mloss: {np.mean(actor_loss_history):.4f} Critic mloss: {np.mean(critic_loss_history):.4f} Total reward: {episodic_reward} Mean(100)={last_mean:.4f}')
