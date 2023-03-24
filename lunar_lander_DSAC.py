@@ -125,8 +125,8 @@ def train_critics(states, actions, next_states, rewards, dones):
         q_mean = tf.squeeze(q_mean)
         q_log_sigma = tf.clip_by_value(tf.squeeze(q_log_sigma), log_std_min, log_std_max)
 
-        # critic_loss = get_plain_critic_error(q_mean, tf.math.exp(q_log_sigma), target_q)
-        critic_loss = get_capped_critic_error(q_mean, tf.math.exp(q_log_sigma), target_q)
+        critic_loss = get_plain_critic_error(q_mean, tf.math.exp(q_log_sigma), target_q)
+        # critic_loss = get_capped_critic_error(q_mean, tf.math.exp(q_log_sigma), target_q)
     gradients = tape.gradient(critic_loss, critic.trainable_variables)
     critic_optimizer.apply_gradients(zip(gradients, critic.trainable_variables))
     return critic_loss
@@ -139,10 +139,10 @@ def get_plain_critic_error(q_mean, q_sigma, target_q):
 
 @tf.function
 def get_capped_critic_error(q_mean, q_sigma, target_q):
-    bound_target_q = tf.clip_by_value(target_q, q_mean - 10, q_mean + 10)
+    bound_target_q = tf.clip_by_value(target_q, q_mean - 20, q_mean + 20)
     partial_dl_dQ =  tf.math.pow(q_mean - target_q, 2) / (2*tf.math.pow(tf.stop_gradient(q_sigma), 2))
-    partial_dpl_dSigma = tf.math.pow(tf.stop_gradient(q_mean) - bound_target_q, 2) / (2*tf.math.pow(q_sigma, 2)) + tf.math.log(q_sigma)
-    return tf.reduce_mean(partial_dl_dQ + partial_dpl_dSigma) # log likelihood
+    partial_dl_dSigma = tf.math.pow(tf.stop_gradient(q_mean) - bound_target_q, 2) / (2*tf.math.pow(q_sigma, 2)) + tf.math.log(q_sigma)
+    return tf.reduce_mean(partial_dl_dQ + partial_dl_dSigma) # log likelihood
 
 @tf.function
 def train_actor(states):
