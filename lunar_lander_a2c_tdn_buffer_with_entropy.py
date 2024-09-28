@@ -38,7 +38,7 @@ def policy_network():
     input = keras.layers.Input(shape=(X_shape))
     x = keras.layers.Dense(256, activation='relu', kernel_initializer = keras.initializers.HeNormal(seed = RND_SEED),
                                                    bias_initializer = keras.initializers.HeNormal(seed = RND_SEED))(input)
-    x = keras.layers.Dense(56, activation='relu', kernel_initializer = keras.initializers.HeNormal(seed = RND_SEED),
+    x = keras.layers.Dense(256, activation='relu', kernel_initializer = keras.initializers.HeNormal(seed = RND_SEED),
                                                    bias_initializer = keras.initializers.HeNormal(seed = RND_SEED))(x)
     actions_layer = keras.layers.Dense(outputs_count, activation='linear')(x)
 
