@@ -2,8 +2,6 @@
 import numpy as np
 import tensorflow as tf
 
-from itertools import chain
-
 class SARST_NStepReturn_RandomAccess_MemoryBuffer_NoOverwrite(object):
     def __init__(self, buffer_size, N, gamma, state_shape, action_shape, action_type = np.float32):
         self.states_memory = np.empty(shape=(buffer_size, *state_shape), dtype = np.float32)

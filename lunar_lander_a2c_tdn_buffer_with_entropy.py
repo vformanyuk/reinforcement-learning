@@ -13,8 +13,6 @@ env = gym.make('LunarLander-v2')
 num_episodes = 10000
 actor_learning_rate = 3e-4
 critic_learning_rate = 3e-4
-# actor_learning_rate = 0.001
-# critic_learning_rate = 0.0005
 X_shape = (env.observation_space.shape[0])
 gamma = 0.99
 entropy_beta = 0.01
@@ -74,8 +72,7 @@ def train_actor(states, actions, advantages):
         actions_distribution = tf.nn.softmax(actions_logits)
         entropy = -tf.reduce_sum(actions_log_distribution * actions_distribution)
 
-        #loss = - actions_log_distribution[action] * advantages + entropy_beta * entropy
-        loss = - tf.reduce_mean(tf.reduce_sum(actions_log_distribution * one_hot_actions_mask, axis=1) * advantages) + entropy_beta * entropy
+        loss = -tf.reduce_mean(tf.reduce_sum(actions_log_distribution * one_hot_actions_mask, axis=1) * advantages) + entropy_beta * entropy
     gradients = tape.gradient(loss, actor.trainable_variables)
     actor_optimizer.apply_gradients(zip(gradients, actor.trainable_variables))
     return loss
@@ -116,29 +113,19 @@ for i in range(num_episodes):
                          next_observation, 
                          reward, 
                          float(done or trunc))
-
-        if (epoch_steps % (batch_size + N_return) == 0 and epoch_steps > 0) or done:
-            if done:
-                states, actions, next_states, rewards, gammas, dones = exp_buffer.get_tail_batch(batch_size)
-            else:
-                states, actions, next_states, rewards, gammas, dones = exp_buffer(batch_size)
-            critic_loss, adv = train_critic(states, next_states, rewards, gammas, dones)
-            critic_loss_history.append(critic_loss)
-            actor_loss = train_actor(states, actions, adv)
-            actor_loss_history.append(actor_loss)
         epoch_steps+=1
         observation = next_observation
 
-    # learning_iterations = len(exp_buffer) // batch_size
-    # for l in range(learning_iterations + 1):
-    #     if l == learning_iterations:
-    #         states, actions, next_states, rewards, gammas, dones = exp_buffer.get_tail_batch(batch_size)
-    #     else:
-    #         states, actions, next_states, rewards, gammas, dones = exp_buffer(batch_size)
-    #     critic_loss, adv = train_critic(states, next_states, rewards, gammas, dones)
-    #     critic_loss_history.append(critic_loss)
-    #     actor_loss = train_actor(states, actions, adv)
-    #     actor_loss_history.append(actor_loss)
+    learning_iterations = len(exp_buffer) // batch_size
+    for l in range(learning_iterations + 1):
+        if l == learning_iterations:
+            states, actions, next_states, rewards, gammas, dones = exp_buffer.get_tail_batch(batch_size)
+        else:
+            states, actions, next_states, rewards, gammas, dones = exp_buffer(batch_size)
+        critic_loss, adv = train_critic(states, next_states, rewards, gammas, dones)
+        critic_loss_history.append(critic_loss)
+        actor_loss = train_actor(states, actions, adv)
+        actor_loss_history.append(actor_loss)
 
     rewards_history.append(episodic_reward)
 
